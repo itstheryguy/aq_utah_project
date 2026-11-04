@@ -44,5 +44,7 @@ jobs:
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
           OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
+          # Must match a scope the service principal's secret allows. Defaults to all-apis.
+          DATABRICKS_OAUTH_SCOPE: ${{ vars.DATABRICKS_OAUTH_SCOPE }}
           SCHEMA: ${{ inputs.schema || vars.AQ_SCHEMA || 'aq_dev' }}
         run: python extractor/extract.py --volume "/Volumes/workspace/$SCHEMA/landing"

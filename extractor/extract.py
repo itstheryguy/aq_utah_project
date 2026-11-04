@@ -125,16 +125,28 @@ def extract():
     return daq is not None and "<site>" in daq
 
 
+def databricks_call(request, timeout):
+    """urlopen for Databricks APIs. On an HTTP error, raise with the response body, which says why."""
+    request.add_header("User-Agent", USER_AGENT)
+    try:
+        return urllib.request.urlopen(request, timeout=timeout)
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"{request.get_method()} {request.full_url.split('?')[0]} → {e.code}: "
+                           f"{e.read().decode('utf-8', 'replace')[:500]}") from None
+
+
 def databricks_token(host):
     if os.environ.get("DATABRICKS_TOKEN"):
         return os.environ["DATABRICKS_TOKEN"]
     creds = f"{os.environ['DATABRICKS_CLIENT_ID']}:{os.environ['DATABRICKS_CLIENT_SECRET']}"
+    # The scope requested must be one the service principal's secret was created with.
+    scope = os.environ.get("DATABRICKS_OAUTH_SCOPE") or "all-apis"
     request = urllib.request.Request(
         f"{host}/oidc/v1/token",
-        data=urllib.parse.urlencode({"grant_type": "client_credentials", "scope": "all-apis"}).encode(),
+        data=urllib.parse.urlencode({"grant_type": "client_credentials", "scope": scope}).encode(),
         headers={"Authorization": "Basic " + base64.b64encode(creds.encode()).decode()},
     )
-    with urllib.request.urlopen(request, timeout=30) as resp:
+    with databricks_call(request, timeout=30) as resp:
         return json.load(resp)["access_token"]
 
 
@@ -147,7 +159,7 @@ def upload(volume_path, data):
         method="PUT",
         headers={"Authorization": f"Bearer {databricks_token(host)}", "Content-Type": "application/octet-stream"},
     )
-    urllib.request.urlopen(request, timeout=120).close()
+    databricks_call(request, timeout=120).close()
 
 
 def main():
