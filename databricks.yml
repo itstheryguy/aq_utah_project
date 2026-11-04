@@ -44,6 +44,16 @@ resources:
           notebook_task:
             notebook_path: ./notebooks/00_setup.py
 
+        - task_key: bronze
+          depends_on:
+            - task_key: setup
+          notebook_task:
+            notebook_path: ./notebooks/01_bronze_ingest.py
+            base_parameters:
+              run_id: "{{job.run_id}}"
+          max_retries: 1
+          min_retry_interval_millis: 60000
+
 targets:
   dev:
     # Development mode prefixes the job name with [dev <user>] and pauses its schedule.
