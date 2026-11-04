@@ -3,7 +3,8 @@
 Forecasts PM2.5 24, 48, and 72 hours ahead for monitoring stations across Utah, with the focus on the Salt Lake Valley, where winter inversions and summer wildfire smoke produce some of the worst short-term air quality in the US.
 
 - **Databricks** ingests Utah DAQ, OpenAQ, Open-Meteo, and EPA data every hour, builds bronze → silver → gold Delta tables, and trains models every week.
-- **Hugging Face** hosts the trained models, a snapshot of the latest features, and a **Streamlit** app. Enter a zip code, pick a model, and see recent air quality and the forecast.
+- Every hour, the current champion models forecast every station (batch inference). Each forecast is stored and later compared with what actually happened.
+- **Hugging Face** hosts the trained models, the latest forecasts, and a **Streamlit** app. Enter a zip code, pick a model, and see recent air quality, the forecast, and how accurate each model has been.
 
 > **Status:** early build. See [Roadmap](#roadmap).
 
@@ -16,10 +17,12 @@ flowchart LR
     src["Utah DAQ · OpenAQ<br/>Open-Meteo · EPA AirData"] -- "REST pull, hourly<br/>bulk backfill" --> bronze
     subgraph dbx["Databricks"]
         bronze[("bronze")] --> silver[("silver")] --> gold[("gold features")]
-        gold --> train["weekly training<br/>baseline · LightGBM · GRU"]
+        gold --> score["hourly batch inference"] --> preds[("predictions")]
+        gold --> train["weekly training + promotion gate<br/>baseline · LightGBM · GRU"]
+        train -- "champion" --> score
     end
-    gold -- "snapshot" --> hf[("Hugging Face Hub")]
-    train -- "models" --> hf
+    preds -- "export each run" --> hf[("Hugging Face Hub")]
+    train -- "models + model cards" --> hf
     hf --> app["Streamlit Space"]
 ```
 
