@@ -1,0 +1,26 @@
+# Secrets
+.env
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Databricks CLI / bundles
+.databricks/
+
+# MLflow / local artifacts
+mlruns/
+*.pt
+*.lgb
+
+# Local data pulls and scratch exploration
+data/
+scratch/
+
+# OS / editor
+.DS_Store
+.vscode/

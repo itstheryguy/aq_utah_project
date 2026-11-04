@@ -1,0 +1,58 @@
+# Databricks Asset Bundle: defines the pipeline jobs as code.
+#
+#   databricks bundle validate            # check config
+#   databricks bundle deploy -t dev       # deploy dev copy (schedule paused, writes to aq_dev)
+#   databricks bundle run aq_hourly       # trigger a run of the dev copy
+#   databricks bundle deploy -t prod      # deploy scheduled copy (writes to aq)
+#
+# Tasks are added here as their notebooks are built (see README → Roadmap).
+
+bundle:
+  name: aq_utah_project
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for all tables
+    default: workspace
+  schema:
+    description: Schema for bronze/silver/gold tables, volumes, and checkpoints
+    default: aq
+
+resources:
+  jobs:
+    aq_hourly:
+      name: aq_hourly
+      # Every run MERGEs into the same tables, and streaming checkpoints can't be shared by two runs at once.
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+      schedule:
+        # :15 past the hour gives the sources time to publish the previous hour's averages.
+        quartz_cron_expression: "0 15 * * * ?"
+        timezone_id: America/Denver
+        # Paused until the ingest → features → export tasks exist. Unpause in prod once they do.
+        pause_status: PAUSED
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+      # No cluster specified, so every task runs on serverless compute.
+      tasks:
+        - task_key: setup
+          notebook_task:
+            notebook_path: ./notebooks/00_setup.py
+
+targets:
+  dev:
+    # Development mode prefixes the job name with [dev <user>] and pauses its schedule.
+    mode: development
+    default: true
+    variables:
+      schema: aq_dev
+
+  prod:
+    mode: production
+    workspace:
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
