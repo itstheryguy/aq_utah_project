@@ -32,7 +32,7 @@ Salt Lake Valley has some of the worst short-term PM2.5 pollution in the US. In 
 
 | Quantity | Estimate |
 |---|---|
-| DAQ stations | 28 statewide, ~13 on the Wasatch Front |
+| DAQ stations | 28 statewide, 17 on the Wasatch Front, plus ~39 low-cost sensors through OpenAQ |
 | One DAQ pull | 3.8 MB of XML (~225 KB compressed): all stations × ~10 days of hourly history |
 | Bronze growth | 24 pulls/day × ~225 KB ≈ **2 GB/year** compressed. ~99.6% of each pull overlaps the previous one. |
 | Silver / gold rows | ~250k station-hours per year. A few hundred MB at most. |
@@ -49,7 +49,7 @@ Salt Lake Valley has some of the worst short-term PM2.5 pollution in the US. In 
 | **Utah DAQ** | REST: XML (all stations in one call), CSV per station. No key. | Hourly | PM2.5, PM10, ozone, NO₂, NOx, CO, SO₂, temperature, humidity, wind, pressure | Main live source of pollutant readings |
 | **Utah DAQ forecast** | CSV. No key. | Daily | Per county, 3 days out: severity category + burn-restriction action | Official forecast to compare against |
 | **OpenAQ v3** | REST, JSON. Free API key. | Hourly | PM2.5 and other pollutants from DAQ (via AirNow) plus other networks | Station coordinates and more stations. Overlaps with DAQ. |
-| **Open-Meteo** | REST, JSON. No key. | Hourly | Weather forecasts, including boundary layer height. The Previous Runs API returns forecasts *as issued* 1–7 days ahead, back to Jan 2024. | Weather features for the forecast window |
+| **Open-Meteo** | REST, JSON. No key. | Hourly | Weather forecasts, including boundary layer height. The Previous Runs API returns forecasts *as issued* 1–7 days ahead, from early 2024 (surface variables only). | Weather features for the forecast window |
 | **EPA AirData** | Bulk historical files | Yearly or quarterly | Quality-assured hourly history | Labels for training (backfill) |
 
 ### What probing the DAQ feeds showed (2026-11-03)
@@ -59,6 +59,20 @@ Salt Lake Valley has some of the worst short-term PM2.5 pollution in the US. In 
 - The XML has site names but **no coordinates**. Coordinates come from OpenAQ or EPA site metadata, matched to DAQ site names through a station mapping table.
 - The CSV's file name says CSV, but the content is tab-separated.
 - The forecast is **categorical** (`good`, `moderate`, …, with an action such as `unrestricted`). Comparisons with it are therefore by AQI category, not PM2.5 value.
+- **A DAQ timestamp marks the start of the hour.** Hawthorne's 07:00 reading matches OpenAQ's 14:00–15:00 UTC period, which is 07:00–08:00 MST.
+
+### Matching stations across sources (2026-11-04)
+- The DAQ XML names sites inconsistently: by county ("Salt Lake County" is Hawthorne, "Weber County" is Harrisville), by site, or by code ("ZZ" is the Prison Site). Each DAQ site was matched to an OpenAQ location by comparing 48 hours of PM2.5. Every match agreed within ~0.05 µg/m³ on average, against >1 µg/m³ for the next-closest candidate. The result is `reference/stations.csv`: 28 monitors, 17 of them on the Wasatch Front.
+- The same monitor reads slightly differently in each source (e.g. 13.6 vs 13.5), so values from different sources are never assumed equal. Source priority decides which one silver keeps.
+- Some OpenAQ locations have several PM2.5 sensors, and not all of them report. Utah Tech Center's first sensor has no data. The station table records which sensor to read, not just the location.
+- **OpenAQ's main contribution is low-cost sensors.** In Utah it has 28 AirNow monitors (the same ones DAQ publishes) plus ~39 active AirGradient and Clarity sensors. Bronze pulls only the low-cost sensors from OpenAQ, and the monitors directly from DAQ.
+- OpenAQ's `/parameters/{id}/latest` endpoint ignores `bbox` and returns every location worldwide. Bronze uses per-sensor `/hours` calls instead (~40 per run, under the 60/minute limit).
+
+### Open-Meteo archive coverage (2026-11-04)
+- The Previous Runs API archives **surface variables only**: temperature, humidity, dew point, wind, pressure, precipitation, cloud cover, and solar radiation, 1–7 days ahead, from early 2024. It has no data for January 2024.
+- **Boundary layer height, upper-air temperatures, and temperatures at fixed heights above the ground are not archived.** Training on them would mean training on data that isn't available for past forecasts, so they can't be training features. Bronze pulls boundary layer height anyway, building our own archive of it from 2026-11-04 on.
+- **Inversion proxy:** valley temperature minus ridge-top temperature, from the forecast for a point on Hidden Peak (Snowbird, ~3,350 m). During an inversion the ridge is *warmer* than the valley, so the difference changes sign. It needs only surface temperature, which is archived.
+- Both the live pull and the archive request `models=gfs_seamless` explicitly. The default ("best match") can change which weather model it uses, which would make training and serving data inconsistent.
 - **Units differ by source:** DAQ reports temperature in °F and ozone, NO₂, NOx, and CO in ppm. Open-Meteo reports °C. Silver converts everything to one set of units, and the unit is part of each column's name (e.g. `temp_c`).
 
 ## 5. Architecture
@@ -143,7 +157,7 @@ The app finds the nearest station to the zip code's centroid. If that station is
 ## 8. Backfill
 
 1. **History download:** EPA AirData hourly files for Utah PM2.5 and the co-pollutants, 2–5 years, saved to the `landing` volume and appended to `bronze_raw` (one row per file).
-2. **Weather history:** Open-Meteo Previous Runs API for the same stations, Jan 2024 onward (where the archive of forecasts as issued begins). Training data is limited to this window.
+2. **Weather history:** Open-Meteo Previous Runs API for the same stations, early 2024 onward (where the archive of forecasts as issued begins). Training data is limited to this window.
 3. **Rebuild:** silver and gold are rebuilt from bronze. Because every write is a MERGE on the table's key, re-running any date range gives the same result (idempotent). Rerunning never duplicates rows.
 
 ## 9. Key decisions
