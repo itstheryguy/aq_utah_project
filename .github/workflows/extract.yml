@@ -1,0 +1,48 @@
+# Hourly extraction: fetch the live sources and land the raw responses in the Databricks landing volume.
+# Databricks' file arrival trigger then starts the aq_hourly job. See extractor/extract.py.
+#
+# Repository secrets: DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET (service principal
+# aq-extractor, write access to the landing volume only), OPENAQ_API_KEY.
+# Repository variable (optional): AQ_SCHEMA, the target schema. Defaults to aq_dev.
+
+name: extract
+
+on:
+  schedule:
+    # :07 past the hour. Sources publish the previous hour's averages just after the hour, and GitHub's
+    # scheduler is busiest at :00. Scheduled runs can still start late or be skipped under load; the
+    # sources' overlapping windows make that harmless.
+    - cron: "7 * * * *"
+  workflow_dispatch:
+    inputs:
+      schema:
+        description: Target schema
+        default: aq_dev
+
+# Never run two extractions at once. A late scheduled run waits for the previous one.
+concurrency:
+  group: extract
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract and upload
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          OPENAQ_API_KEY: ${{ secrets.OPENAQ_API_KEY }}
+          SCHEMA: ${{ inputs.schema || vars.AQ_SCHEMA || 'aq_dev' }}
+        run: python extractor/extract.py --volume "/Volumes/workspace/$SCHEMA/landing"

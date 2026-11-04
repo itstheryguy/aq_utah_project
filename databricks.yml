@@ -17,6 +17,9 @@ variables:
   schema:
     description: Schema for bronze/silver/gold tables, volumes, and checkpoints
     default: aq
+  extractor_principal:
+    description: Application ID of the aq-extractor service principal (GitHub Actions), granted the landing volume
+    default: 46a6ea02-9d8c-4457-9bc8-b14e29815b3a
 
 resources:
   jobs:
@@ -29,10 +32,16 @@ resources:
           default: ${var.catalog}
         - name: schema
           default: ${var.schema}
-      schedule:
-        # :15 past the hour gives the sources time to publish the previous hour's averages.
-        quartz_cron_expression: "0 15 * * * ?"
-        timezone_id: America/Denver
+        - name: extractor_principal
+          default: ${var.extractor_principal}
+      trigger:
+        # The GitHub Actions extractor lands one file per hour. The job runs when it arrives, so there's no
+        # clock to keep in sync between GitHub and Databricks.
+        file_arrival:
+          url: /Volumes/${var.catalog}/${var.schema}/landing/raw/
+          # Wait for writes to settle, and never start more than once per 10 minutes.
+          wait_after_last_change_seconds: 60
+          min_time_between_triggers_seconds: 600
         # Paused until the ingest → features → export tasks exist. Unpause in prod once they do.
         pause_status: PAUSED
       email_notifications:

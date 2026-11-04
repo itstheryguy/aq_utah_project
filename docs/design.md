@@ -87,8 +87,11 @@ flowchart LR
         epa["EPA AirData<br/>bulk history"]
     end
 
+    gha["GitHub Actions extractor<br/>hourly cron"]
+
     subgraph dbx["Databricks (serverless, Unity Catalog)"]
-        subgraph hourly["aq_hourly job"]
+        landing[("landing volume<br/>1 .jsonl.gz per run")]
+        subgraph hourly["aq_hourly job (file arrival trigger)"]
             bronze[("bronze<br/>raw payloads + fetch metadata")]
             silver[("silver<br/>one row per station-hour, UTC,<br/>sources reconciled")]
             gold[("gold features")]
@@ -107,8 +110,8 @@ flowchart LR
         app["Streamlit Space"]
     end
 
-    daq & daqf & oaq & om --> bronze
-    epa --> bronze
+    daq & daqf & oaq & om --> gha -- "Files API, service principal" --> landing -- "Auto Loader" --> bronze
+    epa --> landing
     bronze --> silver --> gold --> score --> preds
     gold --> train
     train -- "champion alias" --> score
@@ -118,10 +121,22 @@ flowchart LR
     hourly -. "row counts, NULL rates, freshness" .-> dq
 ```
 
+### Why extraction runs outside Databricks
+
+The first version pulled the APIs from a Databricks notebook. On this workspace, **serverless compute can only resolve an allowlist of domains:** `api.open-meteo.com`, `pypi.org`, `github.com`, and `huggingface.co` resolve, but `air.utah.gov`, `api.openaq.org`, `www.epa.gov`, and even `www.google.com` fail. A diagnostic run on 2026-11-04 showed that serverless uses its own local DNS resolver (`127.0.0.53`) and filters by the name being looked up: the AWS load balancer behind `air.utah.gov` resolved under its own hostname. DNS-over-HTTPS was blocked too. The free trial docs list "limited external network access". Upgrading the account to pay-as-you-go didn't lift it, and network policies, which would control it, require the Enterprise tier.
+
+Extraction therefore runs in **GitHub Actions** and lands raw files in a Unity Catalog volume. This is the docs' own recommendation for blocked data ("download, then upload to your workspace"), automated:
+- **Extractor** (`extractor/extract.py`): standard-library Python, ~10 seconds per run. It writes **one gzipped JSON Lines file per run**, one line per HTTP request, failures included, with the same fields as `bronze_raw`. One file per run keeps the number of files low and each upload atomic.
+- **Least-privilege credentials:** the extractor authenticates as the `aq-extractor` service principal (OAuth machine-to-machine). It can read and write the landing volume and nothing else, with no access to any table.
+- **Auto Loader** loads new files into `bronze_raw`, with a declared schema. Anything that doesn't fit lands in `_rescued_data`, which is counted per run.
+- **File arrival trigger:** the Databricks job starts when a file lands, so the two systems don't need clocks kept in sync. A late GitHub run simply means a late Databricks run.
+
+This also moves the time spent waiting on HTTP from billed serverless compute to a free runner. If serverless network access opens up later, extraction could move back, and nothing downstream of `bronze_raw` would change.
+
 ### Code path vs model path
 
 The code and the models are deployed separately:
-- **Code** lives in GitHub. Databricks pulls the notebooks through a Git folder. A GitHub Action pushes the app code to the Hugging Face Space.
+- **Code** lives in GitHub. `databricks bundle deploy` uploads the notebooks and job definitions, and a GitHub Action pushes the app code to the Hugging Face Space. The extractor runs straight from the repo in GitHub Actions.
 - **Models** are produced by the weekly training job and go straight from the Unity Catalog registry to the Hugging Face model repo. They never pass through GitHub.
 
 ## 6. Data model
@@ -130,7 +145,7 @@ All tables live in `<catalog>.aq` (prod) or `<catalog>.aq_dev` (dev). Timestamps
 
 | Table | Grain (one row per…) | Key | Write pattern | Notes |
 |---|---|---|---|---|
-| `bronze_raw` | API call or loaded file | `(source, fetched_at)` | Append | `source`, `request`, `fetched_at`, `http_status`, `body` (raw text), `run_id`. Never updated. |
+| `bronze_raw` | API call or loaded file | `(source, fetched_at)` | Append (Auto Loader, idempotent per batch) | `source`, `request`, `fetched_at`, `http_status`, `body` (raw text), `error`, `latency_ms`, `run_id`, `source_file`, `ingested_at`. Never updated. |
 | `silver_station` | Station | `station_id` | MERGE | DAQ site name, OpenAQ location ID, EPA site ID, latitude/longitude, county. Maps the sources' different station IDs to one ID. |
 | `silver_readings` | Station × hour × source | `(station_id, hour_utc, source)` | MERGE, update when values differ | Parsed, units converted, `-9999` → NULL. Keeps each source's values side by side. |
 | `silver_readings_best` | Station × hour | `(station_id, hour_utc)` | MERGE | One value per field, picked by source priority: EPA (quality-checked) > DAQ > OpenAQ. |
@@ -164,6 +179,7 @@ The app finds the nearest station to the zip code's centroid. If that station is
 
 | Decision | Chosen | Rejected | Reasoning |
 |---|---|---|---|
+| Where extraction runs | GitHub Actions → landing volume → Auto Loader | Databricks notebook calling the APIs; classic compute | Serverless can't reach most source domains on this workspace (§5). Classic compute would likely have open internet access, but would spend 3–5 minutes starting a cluster every hour. GitHub Actions is free and keeps Databricks runs short. |
 | Ingestion transport | REST pull → bronze | Kafka | Sources are hourly REST APIs with one consumer. Kafka helps with many producers, high event rates, or several consumers needing decoupling and replay. None apply, and a managed cluster costs money. |
 | Webhooks | Not used | | No source pushes events. Adding webhooks would mean hosting a public endpoint for no benefit. |
 | Inference | **Batch**, hourly in Databricks | Online, in the Space | Each zip maps to one of ~28 stations, so every possible request is known ahead of time: 252 predictions per hour cover them all. The Space needs no ML libraries, and every forecast served is stored, which gives live monitoring for free. |
@@ -219,7 +235,11 @@ No Databricks SQL alerts: they need a SQL warehouse running on a schedule. Faili
 
 | Failure | Effect | Handling |
 |---|---|---|
-| Source API down for a run | That hour isn't fetched | The run continues with the other sources. DAQ's 10-day window means the next successful pull fills the gap. The job retries once. |
+| Source API down for a run | That hour isn't fetched | The run continues with the other sources. DAQ's 10-day window means the next successful pull fills the gap. Each request retries 3 times with backoff. |
+| GitHub scheduled run late or skipped | Data arrives late | Common when GitHub is busy. Overlapping source windows fill the gap on the next run. The bronze freshness check fails the job if no DAQ pull has succeeded for 3 hours. |
+| Extractor fails (bad credential, DAQ down) | No new file | Workflow exits non-zero after uploading what it got, and GitHub emails the failure. |
+| Service principal secret expires | Every upload fails | Secret lifetime is 1 year, with a rotation reminder. The failures surface through both GitHub's email and the freshness check. |
+| Bronze batch retried after a partial failure | Duplicate bronze rows | Delta `txnAppId` / `txnVersion` makes each micro-batch write idempotent. |
 | Duplicate and overlapping rows | Hours counted twice | MERGE on (station, hour) in silver. |
 | Late corrections to a reading | Silver holds an outdated value | MERGE updates the row when the newer fetch differs. |
 | Sensor reports -9999 or an impossible value | Bad features | NULL in silver, range checks, NULL share recorded in `ops_metrics`. |

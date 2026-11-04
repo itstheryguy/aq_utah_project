@@ -2,7 +2,8 @@
 
 Forecasts PM2.5 24, 48, and 72 hours ahead for monitoring stations across Utah, with the focus on the Salt Lake Valley, where winter inversions and summer wildfire smoke produce some of the worst short-term air quality in the US.
 
-- **Databricks** ingests Utah DAQ, OpenAQ, Open-Meteo, and EPA data every hour, builds bronze → silver → gold Delta tables, and trains models every week.
+- A **GitHub Actions** extractor pulls Utah DAQ, OpenAQ, and Open-Meteo every hour and lands the raw responses in Databricks.
+- **Databricks** loads them with Auto Loader, builds bronze → silver → gold Delta tables, and trains models every week.
 - Every hour, the current champion models forecast every station (batch inference). Each forecast is stored and later compared with what actually happened.
 - **Hugging Face** hosts the trained models, the latest forecasts, and a **Streamlit** app. Enter a zip code, pick a model, and see recent air quality, the forecast, and how accurate each model has been.
 
@@ -14,9 +15,10 @@ The design reasoning (requirements, scale estimates, tradeoffs, failure modes) i
 
 ```mermaid
 flowchart LR
-    src["Utah DAQ · OpenAQ<br/>Open-Meteo · EPA AirData"] -- "REST pull, hourly<br/>bulk backfill" --> bronze
+    src["Utah DAQ · OpenAQ<br/>Open-Meteo · EPA AirData"] -- "REST pull, hourly" --> gha["GitHub Actions<br/>extractor"]
+    gha -- "raw files" --> landing
     subgraph dbx["Databricks"]
-        bronze[("bronze")] --> silver[("silver")] --> gold[("gold features")]
+        landing[("landing volume")] -- "Auto Loader" --> bronze[("bronze")] --> silver[("silver")] --> gold[("gold features")]
         gold --> score["hourly batch inference"] --> preds[("predictions")]
         gold --> train["weekly training + promotion gate<br/>baseline · LightGBM · GRU"]
         train -- "champion" --> score
@@ -30,7 +32,11 @@ flowchart LR
 
 | Path | What it does |
 |---|---|
-| `notebooks/00_setup.py` | Creates the schema and volumes, and checks that secrets exist |
+| `extractor/extract.py` | Fetches the live sources and uploads one raw file per run to the landing volume |
+| `.github/workflows/extract.yml` | Runs the extractor hourly |
+| `reference/stations.csv` | Monitoring stations: DAQ site name ↔ OpenAQ IDs, coordinates, forecast area |
+| `notebooks/00_setup.py` | Creates the schema, volumes, and shared tables; grants the extractor access; checks secrets |
+| `notebooks/01_bronze_ingest.py` | Auto Loader: landing files → `bronze_raw`, run metrics → `ops_metrics`, DAQ freshness check |
 | `docs/design.md` | Design document |
 | `databricks.yml` | Asset Bundle defining the jobs |
 
@@ -46,11 +52,21 @@ The notebooks use Databricks **source format**: `.py` files where `# COMMAND ---
 | Hugging Face | Models, feature snapshot, app | Fine-grained write token |
 | Utah DAQ, Open-Meteo, EPA AirData | Data | None |
 
-### 2. Connect GitHub ↔ Databricks
-1. In Databricks, click your avatar → **Settings → Linked accounts** and connect GitHub.
-2. Go to **Workspace → Create → Git folder** and paste this repo's URL.
+### 2. Extractor service principal
+Serverless compute on this workspace can't reach most of the source APIs (see [design doc §5](docs/design.md#5-architecture)), so extraction runs in GitHub Actions.
 
-### 3. Credentials
+1. In Databricks: avatar → **Settings → Identity and access → Service principals → Add new**, named `aq-extractor`. Open it → **Secrets → Generate secret**.
+2. Put its application ID in `databricks.yml` (`extractor_principal`). The setup notebook grants it read/write on the landing volume, and nothing else.
+3. Add GitHub repository secrets:
+   ```bash
+   gh secret set DATABRICKS_HOST            # https://<workspace>.cloud.databricks.com
+   gh secret set DATABRICKS_CLIENT_ID       # the application ID
+   gh secret set DATABRICKS_CLIENT_SECRET
+   gh secret set OPENAQ_API_KEY
+   ```
+4. Test it locally without uploading: `python extractor/extract.py --local-dir data/landing`
+
+### 3. Databricks secrets
 Databricks reads keys from a secret scope, so they never appear in notebooks:
 
 ```bash
@@ -65,17 +81,19 @@ For local exploration, `cp .env.example .env` and fill it in. `.env` is git-igno
 ```bash
 databricks bundle validate
 databricks bundle deploy -t dev && databricks bundle run -t dev aq_hourly   # writes to aq_dev
+gh workflow run extract -f schema=aq_dev                                       # one extractor run now
 ```
 
 ## Cost controls
 - Serverless jobs only, no all-purpose clusters left running.
+- HTTP extraction runs on a free GitHub Actions runner, so Databricks runs only process data.
 - Hourly job for ingest + features + export. Training is a separate weekly job.
 - A budget alert on the Databricks account (Account console → Usage → Budgets).
 - Cost per run measured from `system.billing.usage`.
 
 ## Roadmap
 1. ~~Scaffold: repo, bundle, setup notebook, design doc~~
-2. Bronze: Utah DAQ, OpenAQ, and Open-Meteo hourly pulls; EPA AirData backfill
+2. Bronze: ~~hourly extractor + Auto Loader~~; EPA AirData and Open-Meteo backfill
 3. Silver and gold: parsing, source reconciliation, hourly alignment, feature table
 4. Training: baselines, LightGBM, GRU, MLflow, comparison with the DAQ forecast
 5. Serving: export to Hugging Face, Streamlit Space, GitHub Action deploy
