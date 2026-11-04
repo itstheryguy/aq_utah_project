@@ -19,8 +19,8 @@ Salt Lake Valley has some of the worst short-term PM2.5 pollution in the US. In 
 | Requirement | Target | Why |
 |---|---|---|
 | Data freshness | Forecasts updated within ~1 hour of the source publishing | Sources publish hourly averages. Fresher data doesn't exist. |
-| App latency | Under 2 seconds per lookup | The app only reads precomputed predictions. No model runs in the app. |
-| Availability | Best effort | A portfolio demo. If the pipeline misses runs, the app shows the data's age instead of failing. |
+| App latency | First load a few seconds, then under 1 second per lookup | The app runs in the browser and only filters precomputed predictions. The first load downloads the in-browser Python runtime, which is then cached. |
+| Availability | Best effort, no cold starts | A static Space never sleeps. If the pipeline misses runs, the app shows the data's age instead of failing. |
 | Cost | Under $40–50 per month in total | Paid out of pocket. Drives most of the decisions below. |
 | Reproducibility | Any table can be rebuilt from bronze | Live source feeds only keep ~10 days of data. |
 
@@ -136,6 +136,8 @@ Clustering: the tables are small enough that partitioning would only create many
 | Streamlit Space | Station list with coordinates, and a zip code → latitude/longitude table | Small static files shipped with the app |
 | Anyone | Champion models + model cards (metrics by horizon and season) | HF model repo |
 
+The Space is a **static** Space that runs Streamlit in the visitor's browser through [stlite](https://github.com/whitphx/stlite) (Python compiled to WebAssembly). Because the browser downloads the data directly, the dataset repo is **public**. It holds only forecasts made from public data, and no token is ever sent to the browser. All data loading goes through one function, so the same `app.py` also runs as a normal server-side Streamlit app (`streamlit run` locally, or a Docker Space later).
+
 The app finds the nearest station to the zip code's centroid. If that station is more than a set distance away, the app says so instead of showing a misleading forecast.
 
 ## 8. Backfill
@@ -152,6 +154,7 @@ The app finds the nearest station to the zip code's centroid. If that station is
 | Webhooks | Not used | | No source pushes events. Adding webhooks would mean hosting a public endpoint for no benefit. |
 | Inference | **Batch**, hourly in Databricks | Online, in the Space | Each zip maps to one of ~28 stations, so every possible request is known ahead of time: 252 predictions per hour cover them all. The Space needs no ML libraries, and every forecast served is stored, which gives live monitoring for free. |
 | Serving | Exported predictions on Hugging Face | Databricks Model Serving, online feature store, querying a SQL warehouse per request | These bill continuously or per request. Traffic is tens of requests per day, and the data changes hourly. |
+| App hosting | Static HF Space, Streamlit in the browser (stlite) | Docker Space (needs HF PRO, ~$9/month), Gradio on ZeroGPU | Free, and never sleeps, so no 30–60 s wake-up for occasional visitors. It only works because inference is batch: the app reads a file and draws charts, with no model to run. Moving to Docker later replaces only the packaging, not the app code. |
 | Processing engine | Spark (on the platform it runs on) | DuckDB / Polars + cron | At this volume Spark is neither the bottleneck nor the reason for choosing it. It's the platform's engine and handles the backfill well. Standalone, DuckDB or Polars would be simpler. API calls and model training run as plain Python on one node, not as Spark jobs. |
 | Region | Ingest statewide, app focused on the Wasatch Front | Salt Lake Valley only | One DAQ call returns every station, so statewide ingestion costs nothing extra. Training on more stations helps the models generalize. |
 | Horizons | 24 / 48 / 72h | 1h | At 1h, PM2.5 barely changes, and persistence is nearly impossible to beat. Multi-day horizons are what residents plan around, and they show where models stop adding value. |
