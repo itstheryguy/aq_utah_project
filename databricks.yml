@@ -63,6 +63,16 @@ resources:
           max_retries: 1
           min_retry_interval_millis: 60000
 
+        - task_key: silver
+          depends_on:
+            - task_key: bronze
+          notebook_task:
+            notebook_path: ./notebooks/02_silver.py
+            base_parameters:
+              run_id: "{{job.run_id}}"
+          max_retries: 1
+          min_retry_interval_millis: 60000
+
 targets:
   dev:
     # Development mode prefixes the job name with [dev <user>] and pauses its schedule.

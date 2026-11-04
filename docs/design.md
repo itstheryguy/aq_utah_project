@@ -74,6 +74,15 @@ Salt Lake Valley has some of the worst short-term PM2.5 pollution in the US. In 
 - **Inversion proxy:** valley temperature minus ridge-top temperature, from the forecast for a point on Hidden Peak (Snowbird, ~3,350 m). During an inversion the ridge is *warmer* than the valley, so the difference changes sign. It needs only surface temperature, which is archived.
 - Both the live pull and the archive request `models=gfs_seamless` explicitly. The default ("best match") can change which weather model it uses, which would make training and serving data inconsistent.
 - **Units differ by source:** DAQ reports temperature in °F and ozone, NO₂, NOx, and CO in ppm. Open-Meteo reports °C. Silver converts everything to one set of units, and the unit is part of each column's name (e.g. `temp_c`).
+- **Units also differ by site within the DAQ feed** (2026-11-04). Profiling each site's medians showed:
+  - Washakie reports NO₂ and NOx in ppb, not ppm. Read as ppm, its values were ~1,000× too high.
+  - Magna reports SO₂ in ppb.
+  - Redwash and Ouray report pressure in hPa. The other sites report mmHg.
+  - Washakie's temperature is a constant 0, a placeholder.
+
+  These are recorded, with the evidence for each, in `reference/daq_unit_overrides.csv`, which silver applies before converting. A range check alone wouldn't have caught all of them: Washakie's NO₂ read as ppm (350 ppb median) is still "possible". Comparing sites against each other is what exposed it. After the fix, pressure agrees across sites (Herriman 845 hPa from mmHg vs Redwash 831 hPa native).
+- **Temperature is °F** (within 0.5° of Open-Meteo after conversion). **Wind speed is assumed to be mph,** but that's inferred, not confirmed: DAQ ÷ Open-Meteo km/h has a median of 0.42. That falls between m/s (0.28) and mph (0.62). Station anemometers usually read lower than model winds at 10 m, which points to mph. *Open: confirm with DAQ.*
+- One-off garbage values exist (relative humidity −2678). After conversion, values outside a plausible range become NULL and are counted as `out_of_range_<column>` in `ops_metrics`.
 
 ## 5. Architecture
 
@@ -146,11 +155,13 @@ All tables live in `<catalog>.aq` (prod) or `<catalog>.aq_dev` (dev). Timestamps
 | Table | Grain (one row per…) | Key | Write pattern | Notes |
 |---|---|---|---|---|
 | `bronze_raw` | API call or loaded file | `(source, fetched_at)` | Append (Auto Loader, idempotent per batch) | `source`, `request`, `fetched_at`, `http_status`, `body` (raw text), `error`, `latency_ms`, `run_id`, `source_file`, `ingested_at`. Never updated. |
-| `silver_station` | Station | `station_id` | MERGE | DAQ site name, OpenAQ location ID, EPA site ID, latitude/longitude, county. Maps the sources' different station IDs to one ID. |
-| `silver_readings` | Station × hour × source | `(station_id, hour_utc, source)` | MERGE, update when values differ | Parsed, units converted, `-9999` → NULL. Keeps each source's values side by side. |
-| `silver_readings_best` | Station × hour | `(station_id, hour_utc)` | MERGE | One value per field, picked by source priority: EPA (quality-checked) > DAQ > OpenAQ. |
-| `silver_weather_forecast` | Location × target hour × lead time | `(station_id, target_hour_utc, lead_hours)` | MERGE | Open-Meteo forecast for `target_hour` as issued `lead_hours` earlier. |
-| `silver_daq_forecast` | County × day | `(county, forecast_date, issued_date)` | MERGE | DAQ's official category and action. |
+| `silver_station` | Station | `station_id` | Overwrite from `reference/stations.csv` | DAQ site name, OpenAQ location and PM2.5 sensor IDs, latitude/longitude, county, DAQ forecast area, Wasatch Front flag. Maps the sources' different station IDs to one ID. Reference data kept in git. |
+| `silver_readings` | Station × hour × source | `(station_id, hour_utc, source)` | MERGE, update when newer and values differ | Parsed, units converted per site, `-9999` and out-of-range → NULL. `revisions` counts how often the source changed a value it had already published. |
+| `silver_readings_best` *(with the EPA backfill)* | Station × hour | `(station_id, hour_utc)` | MERGE | One value per field, picked by source priority: EPA (quality-checked) > DAQ. |
+| `silver_weather_forecast` | Station × issue hour × target hour | `(station_id, issued_hour_utc, target_hour_utc)` | MERGE | Open-Meteo forecast for `target_hour` fetched at `issued_hour`, plus `lead_hours`. Matched to stations by position in the request, since the response snaps coordinates to the model grid. |
+| `silver_daq_forecast` | Forecast area × day × issue date | `(daq_forecast_area, forecast_date, issued_date)` | MERGE | DAQ's official category and action, with `days_ahead`. |
+| `silver_lowcost_sensors` | Low-cost PM2.5 sensor | `sensor_id` | MERGE | AirGradient / Clarity sensors from OpenAQ: location, provider, coordinates, last report. |
+| `silver_lowcost_readings` | Sensor × hour | `(sensor_id, hour_utc)` | MERGE | PM2.5, coverage %, OpenAQ flags. Kept apart from `silver_readings`, because these aren't regulatory monitors: gold uses them as neighborhood context, not as forecast targets. |
 | `gold_features` | Station × hour | `(station_id, hour_utc)` | MERGE | Feature table (Unity Catalog feature table). Labels `pm25_t24`, `pm25_t48`, `pm25_t72` are filled in as actual values arrive. |
 | `predictions` | Run × station × model × horizon | `(issued_at, station_id, model, horizon_h)` | Append | `model_version`, `predicted_pm25`, `target_hour_utc`. Joined later with actual values for live accuracy. |
 | `ops_metrics` | Run × check | `(run_id, task, source, metric)` | Append | Row counts, NULL rates, out-of-range counts, freshness. See §11. |

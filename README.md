@@ -36,7 +36,9 @@ flowchart LR
 | `.github/workflows/extract.yml` | Runs the extractor hourly |
 | `reference/stations.csv` | Monitoring stations: DAQ site name ↔ OpenAQ IDs, coordinates, forecast area |
 | `notebooks/00_setup.py` | Creates the schema, volumes, and shared tables; grants the extractor access; checks secrets |
+| `reference/daq_unit_overrides.csv` | DAQ sites that report in different units from the rest of the feed, with evidence |
 | `notebooks/01_bronze_ingest.py` | Auto Loader: landing files → `bronze_raw`, run metrics → `ops_metrics`, DAQ freshness check |
+| `notebooks/02_silver.py` | Parses each source, converts units per site, MERGEs on each table's key into the `silver_*` tables |
 | `docs/design.md` | Design document |
 | `databricks.yml` | Asset Bundle defining the jobs |
 
@@ -94,6 +96,6 @@ gh workflow run extract -f schema=aq_dev                                       #
 ## Roadmap
 1. ~~Scaffold: repo, bundle, setup notebook, design doc~~
 2. Bronze: ~~hourly extractor + Auto Loader~~; EPA AirData and Open-Meteo backfill
-3. Silver and gold: parsing, source reconciliation, hourly alignment, feature table
+3. Silver and gold: ~~parsing, per-site units, MERGE on keys~~; EPA reconciliation; gold feature table
 4. Training: baselines, LightGBM, GRU, MLflow, comparison with the DAQ forecast
 5. Serving: export to Hugging Face, Streamlit Space, GitHub Action deploy
