@@ -20,6 +20,9 @@ variables:
   hf_dataset:
     description: Hugging Face dataset repo the serving task exports forecasts to
     default: itstheryguy/aq-utah-forecasts
+  hf_model_repo:
+    description: Hugging Face model repo the training job publishes champions to
+    default: itstheryguy/aq-utah-models
   extractor_principal:
     description: Application ID of the aq-extractor service principal (GitHub Actions), granted the landing volume
     default: 46a6ea02-9d8c-4457-9bc8-b14e29815b3a
@@ -138,6 +141,8 @@ resources:
           default: ${var.catalog}
         - name: schema
           default: ${var.schema}
+        - name: hf_model_repo
+          default: ${var.hf_model_repo}
       schedule:
         # Mondays 11:00 UTC (4am MST), after a full weekend of hourly data.
         quartz_cron_expression: "0 0 11 ? * MON"
@@ -156,6 +161,7 @@ resources:
             dependencies:
               - lightgbm==4.7.0
               - mlflow==3.18.0
+              - huggingface_hub==2.4.0
         - environment_key: gru
           spec:
             environment_version: "4"
@@ -177,6 +183,16 @@ resources:
           spark_python_task:
             python_file: ./training/train_job.py
             parameters: [--model, gru, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}", --run-id, "{{job.run_id}}"]
+        # Publishes whichever champions changed, even if one family's training failed.
+        - task_key: publish
+          depends_on:
+            - task_key: train_lightgbm
+            - task_key: train_gru
+          run_if: AT_LEAST_ONE_SUCCESS
+          environment_key: lightgbm
+          spark_python_task:
+            python_file: ./training/publish_job.py
+            parameters: [--catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}", --hf-repo, "{{job.parameters.hf_model_repo}}"]
 
 targets:
   dev:
@@ -185,8 +201,9 @@ targets:
     default: true
     variables:
       schema: aq_dev
-      # Dev never publishes: the public dataset is what the live Space reads.
+      # Dev never publishes: the public dataset and model repo are what the live Space and readers use.
       hf_dataset: ""
+      hf_model_repo: ""
 
   prod:
     mode: production

@@ -95,7 +95,9 @@ def main():
     train_seconds = time.time() - started
 
     with mlflow.start_run(run_name=f"{args.model}-{args.run_id}") as run, tempfile.TemporaryDirectory() as tmp:
-        model.save(tmp)
+        # A named folder, not the temp dir itself: MLflow keeps the folder name inside the logged model.
+        model_dir = Path(tmp) / args.model
+        model.save(model_dir)
         mlflow.log_params({
             "model": args.model, "train_from": str(train.hour_utc.min()), "train_to": str(train.hour_utc.max()),
             "gate_from": str(gate.hour_utc.min()), "gate_to": str(end), "train_rows": len(train),
@@ -110,7 +112,7 @@ def main():
         info = mlflow.pyfunc.log_model(
             name="model",
             python_model=Forecaster(args.model),
-            artifacts={"model": tmp},
+            artifacts={"model": str(model_dir)},
             code_paths=[str(ROOT / "aq_models")],
             signature=infer_signature(sample, pd.DataFrame({**{k: sample[k] for k in KEYS}, **{p: 0.0 for p in PREDS}})),
             pip_requirements=PIP[args.model],
