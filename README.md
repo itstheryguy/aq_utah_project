@@ -40,6 +40,7 @@ flowchart LR
 | `notebooks/01_bronze_ingest.py` | Auto Loader: landing files → `bronze_raw`, run metrics → `ops_metrics`, DAQ freshness check |
 | `extractor/backfill.py` | One-time history: OpenAQ (AirNow) PM2.5 + NO₂, Open-Meteo forecasts as issued, EPA AirData. Resumable, with a `repair` step |
 | `notebooks/02_silver.py` | Parses each source, converts units per site, MERGEs on each table's key into the `silver_*` tables |
+| `notebooks/03_gold.py` | One PM2.5 series per station (`silver_readings_best`), then the `gold_features` feature table: lags, rolling stats, forecast weather as issued, labels |
 | `docs/design.md` | Design document |
 | `databricks.yml` | Asset Bundle defining the jobs |
 
@@ -97,6 +98,6 @@ gh workflow run extract -f schema=aq_dev                                       #
 ## Roadmap
 1. ~~Scaffold: repo, bundle, setup notebook, design doc~~
 2. ~~Bronze: hourly extractor + Auto Loader; backfill of AirNow, EPA AirData, and Open-Meteo history~~
-3. Silver and gold: ~~parsing, per-site units, MERGE on keys~~; EPA reconciliation; gold feature table
+3. ~~Silver and gold: parsing, per-site units, MERGE on keys; EPA reconciliation; gold feature table~~
 4. Training: baselines, LightGBM, GRU, MLflow, comparison with the DAQ forecast
 5. Serving: export to Hugging Face, Streamlit Space, GitHub Action deploy

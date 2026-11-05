@@ -196,14 +196,12 @@ def upload_all(volume):
     for path in sorted(OUT.rglob("*.gz")):
         rel = path.relative_to(OUT).as_posix()
         remote = f"{volume.rstrip('/')}/{rel if rel.startswith('epa/') else 'raw/backfill/' + rel.removeprefix('raw/')}"
-        try:
-            extract.upload(remote, path.read_bytes(), overwrite=rel.startswith("epa/"))
-            print(f"uploaded {rel} ({path.stat().st_size / 1e6:.1f} MB) → {remote}")
-        except RuntimeError as e:
-            if "409" in str(e) or "ALREADY_EXISTS" in str(e):
-                print(f"exists, skipped {rel}")
-            else:
-                raise
+        overwrite = rel.startswith("epa/")
+        if not overwrite and extract.exists(remote):
+            print(f"exists, skipped {rel}")
+            continue
+        extract.upload(remote, path.read_bytes(), overwrite=overwrite)
+        print(f"uploaded {rel} ({path.stat().st_size / 1e6:.1f} MB) → {remote}")
 
 
 def main():

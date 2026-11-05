@@ -162,6 +162,24 @@ def upload(volume_path, data, overwrite=False):
     databricks_call(request, timeout=120).close()
 
 
+def exists(volume_path):
+    """HEAD a file in a volume. For a large file, a PUT that will fail with 409 can be cut off mid-upload
+    (broken pipe) before the 409 arrives, so the backfill checks first."""
+    host = os.environ["DATABRICKS_HOST"].rstrip("/")
+    request = urllib.request.Request(
+        f"{host}/api/2.0/fs/files{urllib.parse.quote(volume_path)}",
+        method="HEAD",
+        headers={"Authorization": f"Bearer {databricks_token(host)}"},
+    )
+    try:
+        databricks_call(request, timeout=30).close()
+        return True
+    except RuntimeError as e:
+        if "→ 404" in str(e):
+            return False
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     target = parser.add_mutually_exclusive_group(required=True)

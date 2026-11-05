@@ -158,14 +158,14 @@ All tables live in `<catalog>.aq` (prod) or `<catalog>.aq_dev` (dev). Timestamps
 | `bronze_raw` | API call or loaded file | `(source, fetched_at)` | Append (Auto Loader, idempotent per batch) | `source`, `request`, `fetched_at`, `http_status`, `body` (raw text), `error`, `latency_ms`, `run_id`, `source_file`, `ingested_at`. Never updated. |
 | `silver_station` | Station | `station_id` | Overwrite from `reference/stations.csv` | DAQ site name, OpenAQ location and PM2.5 sensor IDs, latitude/longitude, county, DAQ forecast area, Wasatch Front flag. Maps the sources' different station IDs to one ID. Reference data kept in git. |
 | `silver_readings` | Station × hour × source | `(station_id, hour_utc, source)` | MERGE, update when newer and values differ | Parsed, units converted per site, `-9999` and out-of-range → NULL. `revisions` counts how often the source changed a value it had already published. |
-| `silver_readings_best` *(with the EPA backfill)* | Station × hour | `(station_id, hour_utc)` | MERGE | One value per field, picked by source priority: EPA (quality-checked) > DAQ. |
+| `silver_readings_best` | Station × hour | `(station_id, hour_utc)` | MERGE (written by the gold task) | One PM2.5 and NO₂ series per station: AirNow history first, DAQ after it. `pm25_source` says which. `pm25_qa_removed` marks hours that EPA's quality review invalidated (§8). |
 | `silver_weather_forecast` | Station × issue hour × target hour | `(station_id, issued_hour_utc, target_hour_utc)` | MERGE | Open-Meteo forecast for `target_hour` fetched at `issued_hour`, plus `lead_hours`. Matched to stations by position in the request, since the response snaps coordinates to the model grid. |
 | `silver_daq_forecast` | Forecast area × day × issue date | `(daq_forecast_area, forecast_date, issued_date)` | MERGE | DAQ's official category and action, with `days_ahead`. |
 | `silver_lowcost_sensors` | Low-cost PM2.5 sensor | `sensor_id` | MERGE | AirGradient / Clarity sensors from OpenAQ: location, provider, coordinates, last report. |
 | `silver_lowcost_readings` | Sensor × hour | `(sensor_id, hour_utc)` | MERGE | PM2.5, coverage %, OpenAQ flags. Kept apart from `silver_readings`, because these aren't regulatory monitors: gold uses them as neighborhood context, not as forecast targets. |
-| `gold_features` | Station × hour | `(station_id, hour_utc)` | MERGE | Feature table (Unity Catalog feature table). Labels `pm25_t24`, `pm25_t48`, `pm25_t72` are filled in as actual values arrive. |
+| `gold_features` | Station × hour | `(station_id, hour_utc TIMESERIES)` primary key | MERGE over a 14-day recompute window; `full` mode rebuilds | Unity Catalog feature table. Features known once `hour_utc`'s reading is in, plus labels `pm25_t24/48/72`, which fill in as those hours arrive. See §10. |
 | `predictions` | Run × station × model × horizon | `(issued_at, station_id, model, horizon_h)` | Append | `model_version`, `predicted_pm25`, `target_hour_utc`. Joined later with actual values for live accuracy. |
-| `ops_metrics` | Run × check | `(run_id, task, source, metric)` | Append | Row counts, NULL rates, out-of-range counts, freshness. See §11. |
+| `ops_metrics` | Run × check | `(run_id, task, source, metric)` | Append | Row counts, NULL rates, out-of-range counts, freshness. See §12. |
 
 Clustering: the tables are small enough that partitioning would only create many tiny files. Instead, the larger tables use liquid clustering on `(station_id, hour_utc)`, and predictive optimization compacts the small files left by hourly writes.
 
@@ -237,9 +237,43 @@ Silver and gold can be rebuilt from bronze at any time. Every write is a MERGE o
 | Horizons | 24 / 48 / 72h | 1h | At 1h, PM2.5 barely changes, and persistence is nearly impossible to beat. Multi-day horizons are what residents plan around, and they show where models stop adding value. |
 | Weather features | Forecasts *as issued* (Open-Meteo Previous Runs) | Observed weather | In production, only forecast weather exists for the next 72 hours. Training on observed weather leaks information the model won't have and makes accuracy look better than it is (training/serving skew). |
 | Retraining | Weekly, with a promotion gate | Retrain only manually; promote every new model | A schedule keeps the model current without manual work. The gate stops a bad week of data from silently replacing a better model. |
+| Feature store | Delta table with a `(station_id, hour_utc TIMESERIES)` primary key (Unity Catalog feature table) | Online feature store; features computed separately in training and serving code | Batch inference reads the same table training does, so there's no online lookup to pay for, and one definition of each feature prevents training/serving skew. The timeseries key supports point-in-time joins if other tables' features are added later. |
 | Compute | Serverless jobs | All-purpose clusters | Each run takes minutes. Serverless bills only for those minutes and has no idle cluster to forget about. |
 
-## 10. Models and training
+## 10. Gold features
+
+One row per PM2.5 station per hour, 26 stations, ~635k rows from 2024-01-22. A row holds what is known once the reading for `hour_utc` has arrived. The same table feeds training and hourly inference, so a feature is defined once.
+
+| Group | Columns | Notes |
+|---|---|---|
+| Readings | `pm25_ugm3`, lags 1–72 h, means over 3 h–7 days, 24 h max/std/count, 24 h change, NO₂ 24 h mean | A complete hour grid per station, so `lag(n)` is exactly *n* hours even across gaps. |
+| Region | Wasatch Front mean PM2.5 now and over 24 h | An inversion traps the whole valley at once. |
+| Calendar | Hour, weekday, day of year in fixed MST; `fireworks_t*` for the target day | Fireworks nights (July 4, Pioneer Day on July 24, New Year) cause the sharpest summer spikes. |
+| Weather, per horizon | `wx24_*`, `wx48_*`, `wx72_*`: forecast at the target hour, plus 24 h wind, precipitation, inversion, and pressure change ending there | Forecasts as issued ~1/2/3 days ahead: archive `lead_days` for history, the live forecast issued ≥ 24·d h earlier since extraction started. |
+| Labels | `pm25_t24`, `pm25_t48`, `pm25_t72` | NULL where EPA's review removed the hour. Features keep those hours, because serving sees unreviewed data too. |
+
+**Inversion proxy.** The archive has no boundary layer height, so `inversion_c` is the Hidden Peak ridge temperature minus the station's temperature. It carries real signal. In winter on the Wasatch Front, mean PM2.5 the next day goes from **4.6 µg/m³** when the forecast shows the air well mixed (ridge more than 12 °C colder) to **20.7 µg/m³** under a strong inversion (gap under 4 °C).
+
+**Left out on purpose:**
+- **Low-cost sensors** and **DAQ's official forecast** only exist since live extraction started (2026-11). Columns that are NULL across the whole training history teach the model nothing, and then behave differently at serving time. DAQ's forecast is the benchmark in evaluation instead (§11). Low-cost sensors come back once there's a season of history, or through an OpenAQ backfill of those sensors.
+- **Observed station weather** from DAQ (temperature, wind) has the same problem, and observed weather for the target hour would be leakage anyway (§9).
+
+**Checks run on the first build (2026-11-05):**
+- Time alignment: across 533k rows, every `pm25_t24` and `pm25_t72` equals the reading exactly 24 and 72 hours later, and every `pm25_lag_24h` the reading 24 hours earlier. **0 mismatches.**
+- Rerunning `full` updated 0 rows of `silver_readings_best`, even though the EPA files reloaded into bronze. That confirms the MERGEs are idempotent.
+- Weather coverage is 99.4–99.6% per horizon. PM2.5 coverage is 85% overall, because six monitors started reporting during the window (Washakie and Magna in 2026, for example). Established stations are 97–99% complete.
+
+**Persistence baseline (Wasatch Front, MAE in µg/m³),** the number every model has to beat:
+
+| Season | 24 h | 48 h | 72 h |
+|---|---|---|---|
+| Winter (Dec–Feb) | 4.18 | 5.42 | 6.26 |
+| Summer (Jul–Sep) | 4.05 | 4.60 | 4.78 |
+| Other | 3.27 | 3.75 | 3.96 |
+
+Persistence gets worse fastest in winter, when inversions build and break over days. That's where forecast weather should help most.
+
+## 11. Models and training
 
 - **Baselines:** persistence (forecast = latest value) and same hour yesterday.
 - **LightGBM:** one model per horizon on the gold features.
@@ -262,10 +296,11 @@ Hourly batch inference always loads `models:/<name>@champion`, so a promotion ta
 - **Live accuracy:** `predictions` joined with actual readings once the target hour has passed.
 
 ### Training data caveats *(open)*
-- The newest DAQ readings aren't quality-checked yet. EPA's checked versions arrive months later and replace them (source priority, §6), so the same hour's label can change after a model was trained on it.
+- Labels are the AirNow series as first published, minus the hours EPA's quality review removed. After the backfill date, labels come from DAQ's live feed, which revises some stations' values after about a week (§8). The 14-day gold recompute window picks those revisions up, so a label can change after a model was trained on it.
+- EPA's review lags by months, so the last ~5 months of labels haven't been quality-checked. In the checked period review removed 0–3.3% of hours, which bounds how much this matters.
 - One week adds ~0.5% to the history, so each retrain changes the model very little. Monthly retraining would work too, and would cost less.
 
-## 11. Monitoring
+## 12. Monitoring
 
 Each task writes its checks to `ops_metrics`, so they can be queried over time instead of searched for in logs.
 
@@ -278,7 +313,7 @@ Each task writes its checks to `ops_metrics`, so they can be queried over time i
 
 No Databricks SQL alerts: they need a SQL warehouse running on a schedule. Failing the job covers the urgent cases at no extra cost.
 
-## 12. Failure modes
+## 13. Failure modes
 
 | Failure | Effect | Handling |
 |---|---|---|
@@ -295,6 +330,8 @@ No Databricks SQL alerts: they need a SQL warehouse running on a schedule. Faili
 | Field renamed or removed in a source | Field is all NULL | Bronze keeps the raw body, so nothing is lost. NULL share for that field jumps to ~100%. Fix the parser and rebuild silver from bronze. |
 | Whole payload structure changes | Nothing parses | Parsed row count = 0 is a hard check, so the job fails. |
 | A source changes units (e.g. °F → °C) | Values look valid but are wrong | Not caught by NULL checks. Caught by range checks and the comparison with trailing averages. |
+| Hourly forecasts missing (extractor late or stopped) | Weather features for new rows | Gold uses the newest forecast issued at least *d* days ahead, up to 23 hours older, so a few missed runs leave the features slightly stale rather than missing. Beyond that they're NULL, and `share_with_weather_t*` in `ops_metrics` drops. |
+| New feature added to gold | Old rows lack the column | `MERGE WITH SCHEMA EVOLUTION` adds the column; a `gold_mode=full` run fills it in for every past row. |
 | New model is worse | Worse forecasts | Promotion gate keeps the current champion. |
 | Job misses hours | App shows stale data | The exported file carries an `as_of` timestamp, and the app shows its age. |
 | Cost overrun | Bill exceeds budget | Budget alert on the account. Cost per run measured from `system.billing.usage`. Fallback: run every 2–3 hours. |
