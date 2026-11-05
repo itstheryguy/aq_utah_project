@@ -164,7 +164,7 @@ All tables live in `<catalog>.aq` (prod) or `<catalog>.aq_dev` (dev). Timestamps
 | `silver_lowcost_sensors` | Low-cost PM2.5 sensor | `sensor_id` | MERGE | AirGradient / Clarity sensors from OpenAQ: location, provider, coordinates, last report. |
 | `silver_lowcost_readings` | Sensor × hour | `(sensor_id, hour_utc)` | MERGE | PM2.5, coverage %, OpenAQ flags. Kept apart from `silver_readings`, because these aren't regulatory monitors: gold uses them as neighborhood context, not as forecast targets. |
 | `gold_features` | Station × hour | `(station_id, hour_utc TIMESERIES)` primary key | MERGE over a 14-day recompute window; `full` mode rebuilds | Unity Catalog feature table. Features known once `hour_utc`'s reading is in, plus labels `pm25_t24/48/72`, which fill in as those hours arrive. See §10. |
-| `predictions` | Run × station × model × horizon | `(issued_at, station_id, model, horizon_h)` | Append | `model_version`, `predicted_pm25`, `target_hour_utc`. Joined later with actual values for live accuracy. |
+| `predictions` | Station × as-of hour × model × horizon | `(station_id, hour_utc, model, horizon_h)` | MERGE (a rerun replaces a forecast only if the model version or value changed) | `model_version`, `predicted_pm25`, `target_hour_utc`, `input_age_h`, `scored_at`. Each run scores every station's newest hour with each `@champion` and persistence. Joined later with readings for live accuracy. |
 | `ops_metrics` | Run × check | `(run_id, task, source, metric)` | Append | Row counts, NULL rates, out-of-range counts, freshness. See §12. |
 
 Clustering: the tables are small enough that partitioning would only create many tiny files. Instead, the larger tables use liquid clustering on `(station_id, hour_utc)`, and predictive optimization compacts the small files left by hourly writes.
@@ -173,8 +173,8 @@ Clustering: the tables are small enough that partitioning would only create many
 
 | Consumer | Reads | Format |
 |---|---|---|
-| Streamlit Space | `latest.parquet` in the HF dataset repo: for each station, the last 72 hours of PM2.5, rolling averages, the latest forecasts from each model, live accuracy, and an `as_of` timestamp | Parquet, overwritten each run (the dataset repo's git history keeps old versions) |
-| Streamlit Space | Station list with coordinates, and a zip code → latitude/longitude table | Small static files shipped with the app |
+| Streamlit Space | `latest/` in the HF dataset repo: `forecasts.csv` (every station × model × horizon), `history.csv` (last 7 days of PM2.5), `accuracy.csv` (live MAE over 7 and 30 days), `stations.csv`, `daq_forecast.csv`, and `meta.json` (`as_of`, champion versions) | CSV, overwritten as one commit each run (the dataset repo's git history keeps old versions). CSV rather than Parquet: the app runs in the browser, where reading Parquet means loading pyarrow into WebAssembly, and these files are a few hundred KB at most. |
+| Streamlit Space | Utah zip code centroids (Census ZCTA Gazetteer 2024, 298 zips) | `space/utah_zips.csv`, shipped with the app |
 | Anyone | Champion models + model cards (metrics by horizon and season) | HF model repo |
 
 The Space is a **static** Space that runs Streamlit in the visitor's browser through [stlite](https://github.com/whitphx/stlite) (Python compiled to WebAssembly). Because the browser downloads the data directly, the dataset repo is **public**. It holds only forecasts made from public data, and no token is ever sent to the browser. All data loading goes through one function, so the same `app.py` also runs as a normal server-side Streamlit app (`streamlit run` locally, or a Docker Space later).

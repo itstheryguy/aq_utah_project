@@ -7,7 +7,7 @@ Forecasts PM2.5 24, 48, and 72 hours ahead for monitoring stations across Utah, 
 - Every hour, the current champion models forecast every station (batch inference). Each forecast is stored and later compared with what actually happened.
 - **Hugging Face** hosts the trained models, the latest forecasts, and a **Streamlit** app. Enter a zip code, pick a model, and see recent air quality, the forecast, and how accurate each model has been.
 
-> **Status:** early build. See [Roadmap](#roadmap).
+> **Status:** end to end in dev. Live app: [huggingface.co/spaces/itstheryguy/aq-utah](https://huggingface.co/spaces/itstheryguy/aq-utah). See [Roadmap](#roadmap).
 
 The design reasoning (requirements, scale estimates, tradeoffs, failure modes) is in **[docs/design.md](docs/design.md)**.
 
@@ -43,6 +43,9 @@ flowchart LR
 | `notebooks/03_gold.py` | One PM2.5 series per station (`silver_readings_best`), then the `gold_features` feature table: lags, rolling stats, forecast weather as issued, labels |
 | `aq_models/` | Model code shared by local development and the training job: features and metrics, LightGBM, GRU |
 | `training/backtest.py` | Local backtest on the gold snapshot: train before a cutoff, score the year after, by season |
+| `training/train_job.py` | Weekly training job task: train, register in Unity Catalog, promotion gate |
+| `serving/score_job.py` | Last task of each pipeline run: score every station with each `@champion`, MERGE into `predictions`, live accuracy, export to the HF dataset |
+| `space/` | The Hugging Face Space: Streamlit app run in the browser by stlite, plus the dataset card |
 | `docs/design.md` | Design document |
 | `databricks.yml` | Asset Bundle defining the jobs |
 
@@ -103,4 +106,4 @@ gh workflow run extract -f schema=aq_dev                                       #
 2. ~~Bronze: hourly extractor + Auto Loader; backfill of AirNow, EPA AirData, and Open-Meteo history~~
 3. ~~Silver and gold: parsing, per-site units, MERGE on keys; EPA reconciliation; gold feature table~~
 4. Training: ~~baselines, LightGBM, GRU, MLflow, UC registry, promotion gate~~; comparison with the DAQ forecast
-5. Serving: export to Hugging Face, Streamlit Space, GitHub Action deploy
+5. Serving: ~~batch scoring, `predictions`, export to Hugging Face, Streamlit Space~~; GitHub Action deploy; switch the extractor and schedules to prod

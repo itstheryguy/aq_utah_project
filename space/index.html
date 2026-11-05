@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Utah PM2.5 forecast</title>
+    <!-- stlite runs Streamlit in the browser (Pyodide). Pinned so an upstream release can't change the app. -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.js";
+      mount(
+        {
+          // Streamlit, pandas, and Altair come with stlite; the app needs nothing else.
+          requirements: [],
+          entrypoint: "app.py",
+          files: {
+            "app.py": { url: "./app.py" },
+            "utah_zips.csv": { url: "./utah_zips.csv" },
+          },
+        },
+        document.getElementById("root"),
+      );
+    </script>
+  </body>
+</html>

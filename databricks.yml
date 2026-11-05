@@ -17,6 +17,9 @@ variables:
   schema:
     description: Schema for bronze/silver/gold tables, volumes, and checkpoints
     default: aq
+  hf_dataset:
+    description: Hugging Face dataset repo the serving task exports forecasts to
+    default: itstheryguy/aq-utah-forecasts
   extractor_principal:
     description: Application ID of the aq-extractor service principal (GitHub Actions), granted the landing volume
     default: 46a6ea02-9d8c-4457-9bc8-b14e29815b3a
@@ -40,6 +43,9 @@ resources:
         # incremental: recompute the last 14 days. full: rebuild gold from 2024-01-22 (e.g. after adding a feature).
         - name: gold_mode
           default: incremental
+        # Public dataset the Space reads. Empty skips the export (e.g. for a scratch copy of the pipeline).
+        - name: hf_dataset
+          default: ${var.hf_dataset}
       trigger:
         # The GitHub Actions extractor lands one file per hour. The job runs when files arrive, so there's no
         # clock to keep in sync between GitHub and Databricks.
@@ -55,15 +61,32 @@ resources:
       email_notifications:
         on_failure:
           - ${workspace.current_user.userName}
+      # Every task on environment version 4. Mixing versions (notebook tasks default to the workspace's
+      # version 1) stops serverless from reusing compute between tasks, which makes each run slower.
+      environments:
+        - environment_key: base
+          spec:
+            environment_version: "4"
+        - environment_key: serving
+          spec:
+            environment_version: "4"
+            dependencies:
+              - lightgbm==4.7.0
+              - mlflow==3.18.0
+              - huggingface_hub==2.4.0
+              - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; platform_machine == 'x86_64'"
+              - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; platform_machine == 'aarch64'"
       # No cluster specified, so every task runs on serverless compute.
       tasks:
         - task_key: setup
+          environment_key: base
           notebook_task:
             notebook_path: ./notebooks/00_setup.py
 
         - task_key: bronze
           depends_on:
             - task_key: setup
+          environment_key: base
           notebook_task:
             notebook_path: ./notebooks/01_bronze_ingest.py
             base_parameters:
@@ -74,6 +97,7 @@ resources:
         - task_key: silver
           depends_on:
             - task_key: bronze
+          environment_key: base
           notebook_task:
             notebook_path: ./notebooks/02_silver.py
             base_parameters:
@@ -84,11 +108,25 @@ resources:
         - task_key: gold
           depends_on:
             - task_key: silver
+          environment_key: base
           notebook_task:
             notebook_path: ./notebooks/03_gold.py
             base_parameters:
               run_id: "{{job.run_id}}"
               mode: "{{job.parameters.gold_mode}}"
+          max_retries: 1
+          min_retry_interval_millis: 60000
+
+        # Batch inference + export to Hugging Face. A Python script task, so it can pin an environment with
+        # the model libraries (same as aq_weekly_train). Both families score in one process: the OpenMP
+        # conflict between LightGBM and PyTorch is macOS-only.
+        - task_key: score
+          depends_on:
+            - task_key: gold
+          environment_key: serving
+          spark_python_task:
+            python_file: ./serving/score_job.py
+            parameters: [--catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}", --run-id, "{{job.run_id}}", --hf-dataset, "{{job.parameters.hf_dataset}}"]
           max_retries: 1
           min_retry_interval_millis: 60000
 
