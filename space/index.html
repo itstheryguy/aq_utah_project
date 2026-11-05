@@ -13,8 +13,9 @@
       import { mount } from "https://cdn.jsdelivr.net/npm/@stlite/browser@1.12.0/build/stlite.js";
       mount(
         {
-          // Streamlit, pandas, and Altair come with stlite; the app needs nothing else.
-          requirements: [],
+          // Streamlit, pandas, and Altair come with stlite. tzdata provides the time zone database, which
+          // Pyodide leaves out: without it, converting to America/Denver fails.
+          requirements: ["tzdata"],
           entrypoint: "app.py",
           files: {
             "app.py": { url: "./app.py" },
