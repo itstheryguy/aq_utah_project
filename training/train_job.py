@@ -50,6 +50,7 @@ GATE_DAYS = 28
 PIP = {
     "lightgbm": ["lightgbm==4.7.0", "pandas", "numpy"],
     "gru": ["torch==2.15.0", "pandas", "numpy"],
+    "linear": ["scikit-learn==1.9.1", "pandas", "numpy"],
 }
 
 
@@ -63,7 +64,7 @@ def score(model, df, gate, inputs):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--model", choices=["lightgbm", "gru"], required=True)
+    parser.add_argument("--model", choices=["lightgbm", "gru", "linear"], required=True)
     parser.add_argument("--catalog", default="workspace")
     parser.add_argument("--schema", default="aq")
     parser.add_argument("--run-id", default="manual")
@@ -89,6 +90,8 @@ def main():
     started = time.time()
     if args.model == "lightgbm":
         from aq_models.lgbm import LightGBMForecaster as cls
+    elif args.model == "linear":
+        from aq_models.linear import LinearForecaster as cls
     else:
         from aq_models.gru import GRUForecaster as cls
     model = cls().fit(train)
@@ -107,6 +110,8 @@ def main():
         mlflow.log_metric("train_seconds", train_seconds)
         if args.model == "lightgbm":
             mlflow.log_dict(model.feature_importance(top=40).round(4).to_dict(), "feature_importance.json")
+        if args.model == "linear":
+            mlflow.log_dict(model.coefficients().round(4).to_dict(), "coefficients.json")
 
         sample = df.loc[df.hour_utc >= end - MAX_HORIZON, inputs]
         info = mlflow.pyfunc.log_model(

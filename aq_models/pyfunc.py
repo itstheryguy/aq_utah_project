@@ -21,6 +21,8 @@ class Forecaster(mlflow.pyfunc.PythonModel):
     def load_context(self, context):
         if self.kind == "lightgbm":
             from .lgbm import LightGBMForecaster as cls
+        elif self.kind == "linear":
+            from .linear import LinearForecaster as cls
         else:
             from .gru import GRUForecaster as cls
         self.model = cls.load(context.artifacts["model"])

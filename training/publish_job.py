@@ -18,7 +18,8 @@ import mlflow
 from mlflow import MlflowClient
 
 FAMILIES = {"lightgbm": "LightGBM, one gradient-boosted model per horizon (Tweedie objective)",
-            "gru": "GRU trained from scratch in PyTorch: the last 72 h as a sequence, plus forecast weather, three outputs"}
+            "gru": "GRU trained from scratch in PyTorch: the last 72 h as a sequence, plus forecast weather, three outputs",
+            "linear": "Ridge regression per horizon on five inputs: current and 24 h mean PM2.5, forecast inversion, wind, precipitation"}
 HORIZONS = [24, 48, 72]
 
 
@@ -47,6 +48,7 @@ tags:
   - time-series-forecasting
   - lightgbm
   - pytorch
+  - scikit-learn
 ---
 
 # Utah PM2.5 forecasting models
@@ -90,6 +92,7 @@ which neither the new version nor the previous champion was trained on.
 | Persistence | 3.30 | 3.80 | 4.07 | 5.20 | 4.89 |
 | LightGBM | 2.50 | 2.66 | 2.80 | 3.19 | 3.74 |
 | GRU | 2.57 | 2.67 | 2.78 | 3.05 | 3.70 |
+| Ridge, 5 inputs | 2.78 | 3.02 | 3.11 | 4.00 | 3.84 |
 
 ## Training data
 

@@ -41,7 +41,7 @@ from pyspark.sql import SparkSession  # noqa: E402
 
 from aq_models.common import HORIZONS, KEYS, PREDS  # noqa: E402
 
-FAMILIES = ["lightgbm", "gru"]
+FAMILIES = ["lightgbm", "gru", "linear"]
 CONTEXT_HOURS = 80   # the GRU needs 72 consecutive hours before the hour it scores
 HISTORY_DAYS = 7     # PM2.5 history shown in the app
 STALE_HOURS = 6      # a station whose newest reading is older than this is still scored, but flagged

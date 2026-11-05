@@ -17,13 +17,13 @@ import streamlit as st
 DATASET = "https://huggingface.co/datasets/itstheryguy/aq-utah-forecasts/resolve/main/latest/"
 REPO = "https://github.com/itstheryguy/aq_utah_project"
 MAX_DISTANCE_KM = 25
-MODELS = {"lightgbm": "LightGBM", "gru": "GRU (PyTorch)", "persistence": "Persistence (baseline)"}
+MODELS = {"lightgbm": "LightGBM", "gru": "GRU (PyTorch)", "linear": "Ridge regression", "persistence": "Persistence (baseline)"}
 # EPA AQI breakpoints for PM2.5 (2024). Officially for 24-hour averages; applied here to hourly forecasts.
 AQI = [(9.0, "Good", "#00e400"), (35.4, "Moderate", "#ffff00"), (55.4, "Unhealthy for sensitive groups", "#ff7e00"),
        (125.4, "Unhealthy", "#ff0000"), (225.4, "Very unhealthy", "#8f3f97"), (math.inf, "Hazardous", "#7e0023")]
 # Backtest on 2025-11 → 2026-10, MAE in µg/m³ (docs/design.md §11).
-BACKTEST = pd.DataFrame({"24 h": [3.30, 2.50, 2.57], "48 h": [3.80, 2.66, 2.67], "72 h": [4.07, 2.80, 2.78]},
-                        index=["Persistence", "LightGBM", "GRU"])
+BACKTEST = pd.DataFrame({"24 h": [3.30, 2.78, 2.50, 2.57], "48 h": [3.80, 3.02, 2.66, 2.67], "72 h": [4.07, 3.11, 2.80, 2.78]},
+                        index=["Persistence", "Ridge regression (5 inputs)", "LightGBM", "GRU"])
 
 
 def fetch(url):
@@ -171,13 +171,15 @@ with st.expander("How accurate are these forecasts?"):
                      .rename(columns=lambda h: f"{h} h"), use_container_width=True)
     else:
         st.markdown("**Live:** scoring starts once the first forecasts' target hours have passed.")
-    st.markdown("- Both models cut persistence's error by roughly a quarter to a third, most of all in winter "
-                "inversions, when forecast weather matters most.\n"
+    st.markdown("- LightGBM and the GRU cut persistence's error by roughly a quarter to a third, most of all in "
+                "winter inversions, when forecast weather matters most.\n"
+                "- Ridge regression on five inputs gets about 60% of that gain and trains in seconds. It falls "
+                "behind most in winter, when an inversion's effect builds up nonlinearly over days.\n"
                 "- **They don't predict sudden spikes** from fireworks or wildfire smoke, which come from outside "
                 "what the models see. Check [AirNow](https://www.airnow.gov) during smoke events.\n"
                 "- Categories use EPA's PM2.5 breakpoints, which are defined for 24-hour averages. These are "
                 "hourly values, so treat the category as a guide.")
 
 st.caption(f"Forecasts as of {when(meta['as_of_utc'], date=True)} MT · models: LightGBM v{meta['champions'].get('lightgbm', '–')}, "
-           f"GRU v{meta['champions'].get('gru', '–')} · data: Utah DAQ, AirNow via OpenAQ, EPA AirData, Open-Meteo. "
+           f"GRU v{meta['champions'].get('gru', '–')}, ridge v{meta['champions'].get('linear', '–')} · data: Utah DAQ, AirNow via OpenAQ, EPA AirData, Open-Meteo. "
            "Not an official forecast.")

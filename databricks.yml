@@ -75,6 +75,7 @@ resources:
             environment_version: "4"
             dependencies:
               - lightgbm==4.7.0
+              - scikit-learn==1.9.1
               - mlflow==3.18.0
               - huggingface_hub==2.4.0
               - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; platform_machine == 'x86_64'"
@@ -160,6 +161,7 @@ resources:
             environment_version: "4"
             dependencies:
               - lightgbm==4.7.0
+              - scikit-learn==1.9.1
               - mlflow==3.18.0
               - huggingface_hub==2.4.0
         - environment_key: gru
@@ -171,7 +173,8 @@ resources:
               - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; platform_machine == 'x86_64'"
               - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; platform_machine == 'aarch64'"
               - mlflow==3.18.0
-      # The two families train in parallel, and one failing doesn't stop the other's promotion.
+      # The families train in parallel, and one failing doesn't stop another's promotion. Ridge needs only
+      # scikit-learn, so it shares the LightGBM environment.
       tasks:
         - task_key: train_lightgbm
           environment_key: lightgbm
@@ -183,11 +186,17 @@ resources:
           spark_python_task:
             python_file: ./training/train_job.py
             parameters: [--model, gru, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}", --run-id, "{{job.run_id}}"]
+        - task_key: train_linear
+          environment_key: lightgbm
+          spark_python_task:
+            python_file: ./training/train_job.py
+            parameters: [--model, linear, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}", --run-id, "{{job.run_id}}"]
         # Publishes whichever champions changed, even if one family's training failed.
         - task_key: publish
           depends_on:
             - task_key: train_lightgbm
             - task_key: train_gru
+            - task_key: train_linear
           run_if: AT_LEAST_ONE_SUCCESS
           environment_key: lightgbm
           spark_python_task:

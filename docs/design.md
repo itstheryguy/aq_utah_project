@@ -279,6 +279,7 @@ Persistence gets worse fastest in winter, when inversions build and break over d
 - **Baselines:** persistence (forecast = latest value) and the trailing 24-hour mean. Same-hour-yesterday is persistence at 24 h, and undefined at 48 and 72 h.
 - **LightGBM:** one model per horizon on the gold features.
 - **GRU (PyTorch, trained from scratch):** one network with three outputs (one per horizon). Input is the last 24–72 hours of readings plus forecast weather.
+- **Ridge regression:** the simplest model that uses weather. One per horizon, on five inputs: current PM2.5, the 24 h mean, and the forecast inversion, wind, and precipitation for the 24 hours ending at the target hour. Linear in log space, standardized, so the coefficients read as effect sizes. A `full` variant (every gold feature, station one-hot, cyclic encodings) is backtest-only, to measure what the other 60-odd features buy.
 - **Stretch goal:** a zero-shot time-series foundation model (e.g. Chronos) as a fourth option.
 
 ### Backtest (2026-11-05)
@@ -290,10 +291,14 @@ Trained on 2024-01-22 → 2025-10-28, tested on 2025-11-01 → 2026-10-31: one f
 | Trailing 24 h mean | 3.25 | 3.62 | 3.82 | 3.84 / 5.06 | 4.02 / 4.65 | |
 | **LightGBM** (Tweedie) | **2.50** | **2.66** | 2.80 | **2.66** / 3.19 | 3.41 / 3.74 | 2.7 min |
 | **GRU** (from scratch) | 2.57 | 2.67 | **2.78** | 2.80 / **3.05** | **3.36** / **3.70** | 1.5 min (MPS) |
+| Ridge, 5 inputs | 2.78 | 3.02 | 3.11 | 3.30 / 4.00 | 3.50 / 3.84 | 3 s |
+| Ridge, every feature *(backtest only)* | 2.64 | 2.85 | 2.93 | 3.15 / 3.63 | 3.33 / 3.72 | 7 s |
 
 - **Both models beat persistence by 24–32%, and the gap widens with the horizon.** In winter at 72 h they cut the error by 39–41%, which is where forecast weather matters most.
 - **Inversion and pressure-change forecasts rank among LightGBM's top features,** after recent PM2.5, station, and season. That confirms the valley-minus-ridge proxy (§10) carries signal.
 - **The two models are roughly tied, with different strengths.** LightGBM is better at short range, the GRU at 72 h and in summer. The app shows both.
+- **Ridge on five inputs gets ~60% of LightGBM's gain over persistence** (24 h: 3.30 → 2.78, vs 2.50), and trains in seconds. With every feature it gets ~80%, and in summer it ties the GRU and beats LightGBM. **The gap is winter:** at 72 h ridge is at 4.00 vs LightGBM's 3.19. An inversion's effect depends on how long it has lasted and how much has built up, an interaction a linear model can't express. Its forecast-inversion coefficient is small (0.01–0.04 standardized, vs 0.24 for the current reading), while trees and the GRU use the same signal heavily.
+- **Cost vs accuracy:** the GRU takes ~80 min on serverless CPU each week for roughly LightGBM's accuracy, which takes ~20 min. If one model had to go, it would be the GRU.
 - **Objective:** Tweedie beat squared error at every horizon and brought bias near zero. Huber was similar overall but worse in winter.
 - **Neither model forecasts spikes.** On hours ≥ 35.5 µg/m³ (unhealthy for sensitive groups, 696 hours in the test year), every model, persistence included, is off by 30–35, almost all of it underprediction. No objective changed that. Fireworks smoke and plumes from distant wildfires aren't visible in these features. A smoke signal (e.g. NOAA HMS smoke polygons, or a satellite aerosol product) is the obvious next feature. *Open.*
 - **The GRU's validation MAE peaked at epoch 2.** A 28-day validation window is small and seasonally narrow, so early stopping is noisy. *Open: a longer or season-matched validation window.*

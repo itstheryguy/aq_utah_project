@@ -3,6 +3,7 @@
     databricks fs cp dbfs:/Volumes/workspace/aq_dev/exports/gold_features.parquet data/
     .venv/bin/python -m training.backtest lightgbm
     .venv/bin/python -m training.backtest gru
+    .venv/bin/python -m training.backtest linear      # ridge, 5 inputs per horizon (linear_full: every feature)
     .venv/bin/python -m training.backtest score       # compare every model trained so far, plus baselines
 
 A full year of test data covers one winter of inversions and one summer of smoke, so the numbers are
@@ -29,6 +30,12 @@ def train(name, df, train_df, test_df, out):
         model = LightGBMForecaster().fit(train_df)
         print(f"lightgbm: {time.time() - started:.0f}s, rounds per horizon {model.best_iterations}")
         print(model.feature_importance().round(3).to_string())
+        preds = model.predict(test_df)
+    elif name in ("linear", "linear_full"):
+        from aq_models.linear import LinearForecaster
+        model = LinearForecaster("small" if name == "linear" else "full").fit(train_df)
+        print(f"{name}: {time.time() - started:.0f}s")
+        print(model.coefficients().head(15).round(3).to_string())
         preds = model.predict(test_df)
     elif name == "gru":
         from aq_models.gru import GRUForecaster
@@ -59,7 +66,7 @@ def score(test_df, out):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("step", choices=["lightgbm", "gru", "score"])
+    parser.add_argument("step", choices=["lightgbm", "gru", "linear", "linear_full", "score"])
     parser.add_argument("--data", default="data/gold_features.parquet")
     parser.add_argument("--cutoff", default="2025-11-01")
     parser.add_argument("--test-days", type=int, default=365)

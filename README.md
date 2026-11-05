@@ -20,7 +20,7 @@ flowchart LR
     subgraph dbx["Databricks"]
         landing[("landing volume")] -- "Auto Loader" --> bronze[("bronze")] --> silver[("silver")] --> gold[("gold features")]
         gold --> score["hourly batch inference"] --> preds[("predictions")]
-        gold --> train["weekly training + promotion gate<br/>baseline · LightGBM · GRU"]
+        gold --> train["weekly training + promotion gate<br/>baseline · ridge · LightGBM · GRU"]
         train -- "champion" --> score
     end
     preds -- "export each run" --> hf[("Hugging Face Hub")]
@@ -41,7 +41,7 @@ flowchart LR
 | `extractor/backfill.py` | One-time history: OpenAQ (AirNow) PM2.5 + NO₂, Open-Meteo forecasts as issued, EPA AirData. Resumable, with a `repair` step |
 | `notebooks/02_silver.py` | Parses each source, converts units per site, MERGEs on each table's key into the `silver_*` tables |
 | `notebooks/03_gold.py` | One PM2.5 series per station (`silver_readings_best`), then the `gold_features` feature table: lags, rolling stats, forecast weather as issued, labels |
-| `aq_models/` | Model code shared by local development and the training job: features and metrics, LightGBM, GRU |
+| `aq_models/` | Model code shared by local development and the training job: features and metrics, ridge regression, LightGBM, GRU |
 | `training/backtest.py` | Local backtest on the gold snapshot: train before a cutoff, score the year after, by season |
 | `training/train_job.py` | Weekly training job task: train, register in Unity Catalog, promotion gate |
 | `serving/score_job.py` | Last task of each pipeline run: score every station with each `@champion`, MERGE into `predictions`, live accuracy, export to the HF dataset |
@@ -105,5 +105,5 @@ gh workflow run extract -f schema=aq_dev                                       #
 1. ~~Scaffold: repo, bundle, setup notebook, design doc~~
 2. ~~Bronze: hourly extractor + Auto Loader; backfill of AirNow, EPA AirData, and Open-Meteo history~~
 3. ~~Silver and gold: parsing, per-site units, MERGE on keys; EPA reconciliation; gold feature table~~
-4. Training: ~~baselines, LightGBM, GRU, MLflow, UC registry, promotion gate~~; comparison with the DAQ forecast
+4. Training: ~~baselines, ridge, LightGBM, GRU, MLflow, UC registry, promotion gate~~; comparison with the DAQ forecast
 5. Serving: ~~batch scoring, `predictions`, export to Hugging Face, Streamlit Space~~; GitHub Action deploy; switch the extractor and schedules to prod
