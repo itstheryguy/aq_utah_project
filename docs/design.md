@@ -50,7 +50,8 @@ Salt Lake Valley has some of the worst short-term PM2.5 pollution in the US. In 
 | **Utah DAQ forecast** | CSV. No key. | Daily | Per county, 3 days out: severity category + burn-restriction action | Official forecast to compare against |
 | **OpenAQ v3** | REST, JSON. Free API key. | Hourly | PM2.5 and other pollutants from DAQ (via AirNow) plus other networks | Station coordinates and more stations. Overlaps with DAQ. |
 | **Open-Meteo** | REST, JSON. No key. | Hourly | Weather forecasts, including boundary layer height. The Previous Runs API returns forecasts *as issued* 1–7 days ahead, from early 2024 (surface variables only). | Weather features for the forecast window |
-| **EPA AirData** | Bulk historical files | Yearly or quarterly | Quality-assured hourly history | Labels for training (backfill) |
+| **EPA AirData** | Bulk historical files | Twice a year (June, December) | Quality-assured hourly history, every collocated instrument | Quality check on the training labels (backfill) |
+| **OpenAQ history** | REST, JSON. Free API key. | One-time backfill | AirNow history for the DAQ monitors (primary instrument) | Training history for PM2.5 and NO₂ |
 
 ### What probing the DAQ feeds showed (2026-11-03)
 - `xmlFeed.php` with no `id` returns all 28 sites, with about 10 days of hourly history each. Every hourly pull overlaps the previous ~240 hours.
@@ -182,9 +183,44 @@ The app finds the nearest station to the zip code's centroid. If that station is
 
 ## 8. Backfill
 
-1. **History download:** EPA AirData hourly files for Utah PM2.5 and the co-pollutants, 2–5 years, saved to the `landing` volume and appended to `bronze_raw` (one row per file).
-2. **Weather history:** Open-Meteo Previous Runs API for the same stations, early 2024 onward (where the archive of forecasts as issued begins). Training data is limited to this window.
-3. **Rebuild:** silver and gold are rebuilt from bronze. Because every write is a MERGE on the table's key, re-running any date range gives the same result (idempotent). Rerunning never duplicates rows.
+`extractor/backfill.py` runs once, from a laptop, because serverless can't reach these sources either (§5). Each step saves its files under `data/backfill/` before uploading, so an interrupted run resumes where it stopped. Training starts **2024-01-22**, when Open-Meteo's archive of forecasts issued 3 days ahead begins. The backfill starts a week earlier, so rolling features have history on the first training day.
+
+| Step | Source | Window | Volume | Lands in |
+|---|---|---|---|---|
+| `openaq` | OpenAQ `/sensors/{id}/hours`: PM2.5 + NO₂ sensors of every DAQ monitor (53 sensors) | 2024-01-15 → backfill date | ~1,400 requests, ~1 GB raw JSON | `landing/raw/backfill/openaq_history/` → `bronze_raw` |
+| `openmeteo` | Open-Meteo Previous Runs: 8 surface variables at lead 0–3 days, every station + ridge point | 2024-01-15 → backfill date | 29 × 12 quarterly requests | `landing/raw/backfill/openmeteo_archive/` → `bronze_raw` |
+| `epa` | EPA AirData pre-generated hourly files, PM2.5 (88101) + NO₂ (42602), Utah rows only | 2024-01-01 → 2026-06-01 | 6 national zips, ~65 MB each | `landing/epa/` → `bronze_epa_hourly` |
+
+### What the backfill turned up (2026-11-04)
+- **EPA's quality-assured files lag by months.** They're regenerated twice a year (June and December). On 2026-11-04 the 2026 files ended at **2026-06-01**, and DAQ's live feed only reaches back to 2026-10-20. Neither covers June–October 2026, which is wildfire smoke season.
+- **OpenAQ keeps AirNow's history for the same monitors,** and it fills that gap. For Hawthorne in January 2026, it matched EPA's POC 2 *exactly* (average difference 0.00 over 347 hours), while the second instrument at the site (POC 4) differed by ~1.5 µg/m³. So AirNow publishes the site's primary instrument. EPA's data was missing 12 of AirNow's 359 hours (~3%), presumably invalidated in quality review.
+- **Sites have several collocated instruments (POCs).** EPA reports each one. Hawthorne, Smithfield, Roosevelt, Herriman, and Moab each have two, and Moab's two use different methods.
+- **Non-reference PM2.5 (parameter 88502) has no Utah data.** Every Utah PM2.5 monitor reports under 88101.
+- **NO₂ units differ by source again:** OpenAQ reports ppm, EPA ppb. Silver converts both to ppb.
+- **Station IDs don't line up across systems.** EPA site IDs were matched to stations by coordinates, one to one. Most matches are within 0.6 km, but Rose Park is 1.25 km away. The match is one to one, but the two systems' coordinates for the site differ.
+- **The APIs are slow, not just rate-limited.** OpenAQ takes ~6 seconds to answer each 40-day request, so the history download runs as 5 parallel shards. Open-Meteo counts large requests as several calls against its free limits, so that step runs one request at a time and waits it out when it gets a 429.
+
+### Decision: AirNow history is the training series, and EPA is a check on it
+- **Train on what you serve.** Live forecasts are scored against DAQ's feed, which is the AirNow primary-instrument series. Training labels from the same series keep training and serving consistent. EPA's quality-assured data would mean switching series on 2026-06-01, with a choice of instrument at five sites.
+- **EPA tells us which hours quality review removed or changed.** Gold can drop those hours from the labels where EPA covers them. `silver_epa_readings` keeps every POC with its qualifiers, so this can be measured rather than assumed.
+
+### Checking the decision against the data (2026-11-04)
+| Comparison | Overlap | Result |
+|---|---|---|
+| AirNow vs EPA, PM2.5 | 2024-01-15 → 2026-06-01, 24 stations | AirNow matches one EPA instrument **exactly 96–100% of the time** at every station. Quality review removed **0–3.3%** of AirNow's hours (most at Enoch, 3.3%, and Lindon, 2.4%). |
+| AirNow vs DAQ live, NO₂ | Since 2026-10-20 | Only 10% exact, but the average difference is 0.25 ppb: exactly the average error from rounding to whole numbers. DAQ reports ppm to 3 decimals, which is 1 ppb resolution. |
+| AirNow vs DAQ live, PM2.5, 19 stations | Since 2026-10-20 | Average difference 0.05, with DAQ consistently 0.05 higher. That's half of one 0.1 step, so the two sources round differently. |
+| AirNow vs DAQ live, PM2.5, 7 stations | Since 2026-10-20 | Prison Site, Erda, Bountiful, Brigham City, Smithfield, Lake Park, and Magna, the stations whose DAQ feed goes back 15 days rather than 10. Hours less than 7 days old agree (average difference ~0.05). **Older hours read 0.3–0.9 µg/m³ lower in DAQ than in AirNow,** which still holds the values as first published. A shift of ±1 hour makes the agreement far worse, so this isn't a time offset. |
+
+The likely explanation is that **DAQ revises some stations' values downward after about a week** in its live feed, perhaps applying a correction for one instrument type. Silver's `revisions` counter will confirm or rule this out over the coming weeks: revisions should cluster at those 7 stations, on hours around 7 days old. *Open.*
+
+None of this weakens the decision. Fresh DAQ values (served) match AirNow (trained on), and AirNow matches EPA's quality-assured data. Only DAQ's later revisions differ, and the training labels don't use those.
+
+### Reference data changes need a replay
+The first EPA load dropped ~67,000 rows. The station mapping had been built from EPA's 2026 file, so Redwash and Ouray (no 2026 EPA data yet) and two tribal NO₂ sites had no station. Fixing `stations.csv` doesn't reprocess those rows: the silver stream's checkpoint has already moved past them. The fix is to delete that one stream's checkpoint and rerun. Every silver write is a MERGE, so the replay matches the rows already loaded instead of duplicating them. The two tribal sites aren't in DAQ's feed and stay out of scope.
+
+### Rebuilding
+Silver and gold can be rebuilt from bronze at any time. Every write is a MERGE on the table's key, so re-running any date range gives the same result and never duplicates rows.
 
 ## 9. Key decisions
 
@@ -250,6 +286,7 @@ No Databricks SQL alerts: they need a SQL warehouse running on a schedule. Faili
 | GitHub scheduled run late or skipped | Data arrives late | Common when GitHub is busy. Overlapping source windows fill the gap on the next run. The bronze freshness check fails the job if no DAQ pull has succeeded for 3 hours. |
 | Extractor fails (bad credential, DAQ down) | No new file | Workflow exits non-zero after uploading what it got, and GitHub emails the failure. |
 | Service principal secret expires | Every upload fails | Secret lifetime is 1 year, with a rotation reminder. The failures surface through both GitHub's email and the freshness check. |
+| Reference mapping fixed after data was loaded | Rows that didn't map earlier stay missing | Reset that silver stream's checkpoint and rerun. MERGE makes the replay idempotent. `ops_metrics` row counts (`bronze_rows` vs `rows`) show when a join is dropping rows. |
 | Bronze batch retried after a partial failure | Duplicate bronze rows | Delta `txnAppId` / `txnVersion` makes each micro-batch write idempotent. |
 | Duplicate and overlapping rows | Hours counted twice | MERGE on (station, hour) in silver. |
 | Late corrections to a reading | Silver holds an outdated value | MERGE updates the row when the newer fetch differs. |

@@ -45,7 +45,9 @@ import pandas as pd
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
-stations_pd = pd.read_csv("../reference/stations.csv", dtype={"openaq_location_id": "Int64", "openaq_pm25_sensor_id": "Int64"})
+stations_pd = pd.read_csv("../reference/stations.csv", dtype={
+    "openaq_location_id": "Int64", "openaq_pm25_sensor_id": "Int64", "openaq_no2_sensor_id": "Int64", "epa_site_id": "string",
+})
 overrides_pd = pd.read_csv("../reference/daq_unit_overrides.csv")
 
 # COMMAND ----------
@@ -69,7 +71,8 @@ stations = spark.table("silver_station")
 
 # COMMAND ----------
 
-def merge_stream(name, sources, transform, target, keys, ddl):
+def merge_stream(name, sources, transform, target, keys, ddl, table="bronze_raw"):
+    """Stream `table` (bronze_raw rows from `sources` by default) through `transform` and MERGE into `target`."""
     spark.sql(f"CREATE TABLE IF NOT EXISTS {fq(target)} ({ddl}) CLUSTER BY ({', '.join(keys)})")
 
     def write_batch(batch, batch_id):
@@ -111,10 +114,12 @@ def merge_stream(name, sources, transform, target, keys, ddl):
         ).write.mode("append").saveAsTable(fq("ops_metrics"))
         batch.unpersist()
 
+    # Bound each micro-batch: a backfill can put ~1 GB of raw JSON into bronze at once.
+    stream = spark.readStream.option("maxBytesPerTrigger", "256m").table(table)
+    if table == "bronze_raw":
+        stream = stream.where(F.col("source").isin(sources) & F.col("http_status").between(200, 299))
     return (
-        spark.readStream.table("bronze_raw")
-        .where(F.col("source").isin(sources) & F.col("http_status").between(200, 299))
-        .writeStream
+        stream.writeStream
         .foreachBatch(write_batch)
         .option("checkpointLocation", f"{checkpoint_root}/silver_{name}")
         .trigger(availableNow=True)
@@ -418,6 +423,165 @@ merge_stream(
     "openaq_hours", ["openaq_sensor_hours"], transform_openaq_hours, "silver_lowcost_readings", ["sensor_id", "hour_utc"],
     "sensor_id BIGINT, hour_utc TIMESTAMP, coverage_pct DOUBLE, has_flags BOOLEAN, pm25_ugm3 DOUBLE, "
     "row_hash STRING, fetched_at TIMESTAMP, first_seen_at TIMESTAMP, revisions INT",
+).awaitTermination()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## History (backfill)
+# MAGIC
+# MAGIC | Table | From | Covers | Role |
+# MAGIC |---|---|---|---|
+# MAGIC | `silver_airnow_history` | OpenAQ `/sensors/{id}/hours` for each DAQ monitor | 2024-01-15 → backfill date | Training history: the same primary-instrument series DAQ publishes live |
+# MAGIC | `silver_epa_readings` | EPA AirData pre-generated files | 2024-01-01 → 2026-06-01 | Quality-assured check: every collocated instrument (POC), with qualifiers |
+# MAGIC | `silver_weather_archive` | Open-Meteo Previous Runs | 2024-01-15 → backfill date | Forecasts as issued 0–3 days ahead, for training |
+# MAGIC
+# MAGIC These are long tables (one row per parameter or lead time) so that values for one key arriving in different
+# MAGIC files can't overwrite each other.
+
+# COMMAND ----------
+
+HISTORY_RANGES = {"pm25": (-5, 1000), "no2": (-5, 500)}
+sensor_map = stations.select(
+    "station_id", F.explode(F.array(
+        F.struct(F.lit("pm25").alias("parameter"), F.col("openaq_pm25_sensor_id").alias("sensor_id")),
+        F.struct(F.lit("no2").alias("parameter"), F.col("openaq_no2_sensor_id").alias("sensor_id")),
+    )).alias("m"),
+).select("station_id", "m.parameter", "m.sensor_id").where("sensor_id IS NOT NULL")
+
+
+def in_range(parameter, value):
+    out = F.lit(None).cast("double")
+    for p, (lo, hi) in HISTORY_RANGES.items():
+        out = F.when((parameter == p) & value.between(lo, hi), value).otherwise(out)
+    return out
+
+
+def transform_airnow_history(batch):
+    rows = batch.select(
+        "fetched_at",
+        F.regexp_extract("request", r"/sensors/(\d+)/hours", 1).cast("bigint").alias("sensor_id"),
+        F.explode(F.from_json("body", (
+            "STRUCT<results: ARRAY<STRUCT<value: DOUBLE, parameter: STRUCT<units: STRING>, "
+            "period: STRUCT<datetimeFrom: STRUCT<utc: STRING>>, coverage: STRUCT<percentComplete: DOUBLE>>>>"
+        ))["results"]).alias("r"),
+    ).join(F.broadcast(sensor_map), "sensor_id")
+    # OpenAQ reports AirNow gases in ppm; silver uses ppb.
+    value = F.when(F.col("r.parameter.units") == "ppm", F.col("r.value") * 1000).otherwise(F.col("r.value"))
+    rows = rows.select(
+        "station_id", "parameter",
+        F.to_timestamp("r.period.datetimeFrom.utc").alias("hour_utc"),
+        value.alias("raw"),
+        F.col("r.coverage.percentComplete").alias("coverage_pct"),
+        "fetched_at",
+    )
+    out_of_range = rows.where(F.col("raw").isNotNull() & in_range(F.col("parameter"), F.col("raw")).isNull()).count()
+    rows = rows.withColumn("value", in_range(F.col("parameter"), F.col("raw"))).drop("raw")
+    return rows, [("out_of_range", out_of_range)]
+
+
+merge_stream(
+    "airnow_history", ["openaq_history"], transform_airnow_history, "silver_airnow_history",
+    ["station_id", "parameter", "hour_utc"],
+    "station_id STRING, parameter STRING, hour_utc TIMESTAMP, coverage_pct DOUBLE, value DOUBLE, "
+    "row_hash STRING, fetched_at TIMESTAMP, first_seen_at TIMESTAMP, revisions INT",
+).awaitTermination()
+
+# COMMAND ----------
+
+EPA_PARAMETERS = {"88101": "pm25", "42602": "no2"}
+epa_sites = stations.where("epa_site_id IS NOT NULL").select("station_id", "epa_site_id")
+
+
+def transform_epa(batch):
+    rows = batch.select(
+        F.concat_ws("-", "state_code", "county_code", "site_num").alias("epa_site_id"),
+        F.element_at(F.create_map(*[F.lit(x) for kv in EPA_PARAMETERS.items() for x in kv]), F.col("parameter_code")).alias("parameter"),
+        F.col("poc").cast("int").alias("poc"),
+        # EPA files carry both local and GMT times; GMT is already UTC and has no DST ambiguity.
+        F.to_timestamp(F.concat_ws(" ", "date_gmt", "time_gmt"), "yyyy-MM-dd HH:mm").alias("hour_utc"),
+        F.expr("try_cast(sample_measurement AS DOUBLE)").alias("raw"),
+        F.col("units_of_measure").alias("units"),
+        F.nullif("qualifier", F.lit("")).alias("qualifier"),
+        F.col("method_code"),
+        F.to_date("date_of_last_change").alias("date_of_last_change"),
+        F.col("ingested_at").alias("fetched_at"),
+    ).join(F.broadcast(epa_sites), "epa_site_id").drop("epa_site_id").where("parameter IS NOT NULL")
+    out_of_range = rows.where(F.col("raw").isNotNull() & in_range(F.col("parameter"), F.col("raw")).isNull()).count()
+    rows = rows.withColumn("value", in_range(F.col("parameter"), F.col("raw"))).drop("raw")
+    units = [r.units for r in rows.select("parameter", "units").distinct().collect()]
+    print("EPA units seen:", units)  # pm25 µg/m³ and no2 ppb, already silver units
+    return rows, [("out_of_range", out_of_range)]
+
+
+merge_stream(
+    "epa", None, transform_epa, "silver_epa_readings", ["station_id", "parameter", "hour_utc", "poc"],
+    "station_id STRING, parameter STRING, poc INT, hour_utc TIMESTAMP, units STRING, qualifier STRING, "
+    "method_code STRING, date_of_last_change DATE, value DOUBLE, "
+    "row_hash STRING, fetched_at TIMESTAMP, first_seen_at TIMESTAMP, revisions INT",
+    table="bronze_epa_hourly",
+).awaitTermination()
+
+# COMMAND ----------
+
+ARCHIVE_FIELDS = {  # Open-Meteo variable: (silver column, conversion), same columns as silver_weather_forecast
+    "temperature_2m": ("temp_c", None),
+    "relative_humidity_2m": ("rh_pct", None),
+    "wind_speed_10m": ("wind_speed_ms", lambda x: x / 3.6),
+    "wind_direction_10m": ("wind_dir_deg", None),
+    "pressure_msl": ("pressure_msl_hpa", None),
+    "precipitation": ("precip_mm", None),
+    "cloud_cover": ("cloud_cover_pct", None),
+    "shortwave_radiation": ("shortwave_wm2", None),
+}
+ARCHIVE_LEADS = [0, 1, 2, 3]
+
+
+def archive_var(v, lead):
+    return v if lead == 0 else f"{v}_previous_day{lead}"
+
+
+archive_schema = "STRUCT<hourly: STRUCT<time: ARRAY<STRING>, " + ", ".join(
+    f"{archive_var(v, d)}: ARRAY<DOUBLE>" for d in ARCHIVE_LEADS for v in ARCHIVE_FIELDS
+) + ">>"
+
+
+def transform_weather_archive(batch):
+    located = batch.select(
+        "fetched_at",
+        F.round(F.expr("parse_url(request, 'QUERY', 'latitude')").cast("double"), 5).alias("lat"),
+        F.round(F.expr("parse_url(request, 'QUERY', 'longitude')").cast("double"), 5).alias("lon"),
+        F.from_json("body", archive_schema)["hourly"].alias("h"),
+    ).join(F.broadcast(station_coords), ["lat", "lon"], "left")
+    unmatched = located.where("station_id IS NULL").count()
+
+    cols = ["time"] + [archive_var(v, d) for d in ARCHIVE_LEADS for v in ARCHIVE_FIELDS]
+    hours = located.where("station_id IS NOT NULL").select(
+        "station_id", "fetched_at", F.explode(F.arrays_zip(*[F.col(f"h.{c}").alias(c) for c in cols])).alias("z")
+    )
+    by_lead = hours.select(
+        "station_id", "fetched_at",
+        F.to_timestamp("z.time", "yyyy-MM-dd'T'HH:mm").alias("target_hour_utc"),
+        F.explode(F.array(*[
+            F.struct(F.lit(d).alias("lead_days"), *[
+                (fn(F.col(f"z.{archive_var(v, d)}")) if fn else F.col(f"z.{archive_var(v, d)}")).alias(col)
+                for v, (col, fn) in ARCHIVE_FIELDS.items()
+            ])
+            for d in ARCHIVE_LEADS
+        ])).alias("x"),
+    )
+    rows = by_lead.select("station_id", "target_hour_utc", "x.*", "fetched_at").where(
+        " OR ".join(f"{col} IS NOT NULL" for col, _ in ARCHIVE_FIELDS.values())
+    )
+    return rows, [("unmatched_locations", unmatched)]
+
+
+merge_stream(
+    "weather_archive", ["openmeteo_archive"], transform_weather_archive, "silver_weather_archive",
+    ["station_id", "target_hour_utc", "lead_days"],
+    "station_id STRING, target_hour_utc TIMESTAMP, lead_days INT, "
+    + ", ".join(f"{col} DOUBLE" for col, _ in ARCHIVE_FIELDS.values())
+    + ", row_hash STRING, fetched_at TIMESTAMP, first_seen_at TIMESTAMP, revisions INT",
 ).awaitTermination()
 
 # COMMAND ----------

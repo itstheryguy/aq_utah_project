@@ -102,6 +102,9 @@ query = (
     spark.readStream.format("cloudFiles")
     .option("cloudFiles.format", "json")
     .option("cloudFiles.schemaEvolutionMode", "rescue")
+    # Hourly files are ~275 KB, but backfill files reach ~20 MB of JSON each. Capping files per batch keeps
+    # each micro-batch small enough to parse comfortably.
+    .option("cloudFiles.maxFilesPerTrigger", 10)
     .schema(LANDED_SCHEMA)
     .load(landing)
     .select(
@@ -119,6 +122,39 @@ query = (
     .start()
 )
 query.awaitTermination()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## EPA AirData backfill files
+# MAGIC `extractor/backfill.py epa` lands Utah rows of EPA's pre-generated hourly files as CSV under
+# MAGIC `landing/epa/`. They load into `bronze_epa_hourly` row for row, every column kept as text. EPA republishes
+# MAGIC each file twice a year, so `allowOverwrites` reloads a replaced file. Silver's MERGE removes the duplicates
+# MAGIC that creates.
+
+# COMMAND ----------
+
+EPA_COLUMNS = [
+    "state_code", "county_code", "site_num", "parameter_code", "poc", "latitude", "longitude", "datum",
+    "parameter_name", "date_local", "time_local", "date_gmt", "time_gmt", "sample_measurement", "units_of_measure",
+    "mdl", "uncertainty", "qualifier", "method_type", "method_code", "method_name", "state_name", "county_name",
+    "date_of_last_change",
+]
+
+(
+    spark.readStream.format("cloudFiles")
+    .option("cloudFiles.format", "csv")
+    .option("cloudFiles.allowOverwrites", "true")
+    .option("header", "true")
+    .schema(", ".join(f"{c} STRING" for c in EPA_COLUMNS))  # columns by position; EPA's headers have spaces
+    .load(f"/Volumes/{catalog}/{schema}/landing/epa")
+    .select("*", F.col("_metadata.file_path").alias("source_file"), F.current_timestamp().alias("ingested_at"))
+    .writeStream
+    .option("checkpointLocation", f"/Volumes/{catalog}/{schema}/checkpoints/bronze_epa_hourly")
+    .trigger(availableNow=True)
+    .toTable("bronze_epa_hourly")
+    .awaitTermination()
+)
 
 # COMMAND ----------
 

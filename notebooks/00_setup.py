@@ -29,6 +29,10 @@ spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.landing")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.checkpoints")
 
+# Auto Loader needs the folders it watches to exist before the first file arrives.
+for folder in ["raw", "epa"]:
+    dbutils.fs.mkdirs(f"/Volumes/{catalog}/{schema}/landing/{folder}")
+
 # COMMAND ----------
 
 # MAGIC %md

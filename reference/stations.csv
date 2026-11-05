@@ -1,30 +1,30 @@
-station_id,name,daq_site_name,openaq_location_id,openaq_pm25_sensor_id,latitude,longitude,county,daq_forecast_area,wasatch_front,has_pm25,kind
-hawthorne,Hawthorne,Salt Lake County,288,3724,40.7335,-111.8717,Salt Lake,slc,True,True,monitor
-rose_park,Rose Park,Rose Park,8777,25595,40.7955,-111.9309,Salt Lake,slc,True,True,monitor
-near_road,NR,Near Road,6426,5077829,40.66284,-111.9018,Salt Lake,slc,True,True,monitor
-utah_tech_center,Utah Tech. Center,Environmental Quality,228304,1315805,40.7771,-111.945,Salt Lake,slc,True,True,monitor
-herriman,Herriman #3,Herriman,5818,15813,40.49641,-112.0363,Salt Lake,slc,True,True,monitor
-copper_view,Copper View,Copper View,8758,25535,40.59806,-111.89417,Salt Lake,slc,True,True,monitor
-magna,MA,Magna #2,7296,21017,40.71206,-112.11112,Salt Lake,slc,True,True,monitor
-lake_park,Lake Park,Lake Park,228376,1316195,40.70987,-112.00866,Salt Lake,slc,True,True,monitor
-prison_site,Prison Site,ZZ,228377,1316196,40.8079,-112.08772,Salt Lake,slc,True,True,monitor
-red_butte,Red Butte,Red Butte,3318370,11669376,40.76652,-111.82835,Salt Lake,slc,True,True,monitor
-beach,Beach,Beach #4,6199576,15161833,40.735,-112.211,Salt Lake,slc,True,True,monitor
-bountiful,BV,Davis County,221401,1287320,40.898,-111.8855,Davis,bv,True,True,monitor
-harrisville,Harrisville,Weber County,2218,1316200,41.3028,-111.9883,Weber,weber,True,True,monitor
-brigham_city,Brigham City #3,Box Elder County,3303046,11669374,41.48993,-112.02143,Box Elder,boxelder,True,True,monitor
-erda,Erda,Tooele County,2168,3897,40.60056,-112.355,Tooele,tooele,True,True,monitor
-lindon,Lindon,Utah County,331,2654,40.3414,-111.7136,Utah,utah,True,True,monitor
-spanish_fork,Spanish Fork,Spanish Fork,1867,25846,40.1364,-111.6602,Utah,utah,True,True,monitor
-smithfield,Smithfield,Cache County,305,3346,41.84278,-111.85194,Cache,cache,False,True,monitor
-washakie,Washakie - NWBSN,Washakie Reservation,5227,13532,41.94595,-112.23318,Box Elder,boxelder,False,True,monitor
-heber,Heber,Wasatch County,3017494,10269453,40.49796,-111.39763,Wasatch,hb,False,True,monitor
-price,P2,Price,781,1316201,39.5958,-110.77,Carbon,p2,False,True,monitor
-roosevelt,Roosevelt,Duchesne County,2110,3795,40.2943,-110.009,Duchesne,rs,False,True,monitor
-vernal,Vernal #4,Uintah County,1522,2681,40.46472,-109.56083,Uintah,v4,False,True,monitor
-redwash,Redwash,Redwash,2153,,40.20443,-109.35321,Uintah,v4,False,False,monitor
-ouray,Ouray,Ouray,2213,,40.05485,-109.68737,Uintah,v4,False,False,monitor
-moab,Moab #7,Grand County,875165,4800118,38.56605,-109.53717,Grand,m7,False,True,monitor
-enoch,Enoch,Enoch,8585,24944,37.74744,-113.05552,Iron,en,False,True,monitor
-hurricane,Hurricane,Washington County,1542,24950,37.179,-113.3052,Washington,washington,False,True,monitor
-ref_hidden_peak,Hidden Peak (Snowbird) ridge-top weather reference,,,,40.5617,-111.6452,Salt Lake,,True,False,weather_ref
+station_id,name,daq_site_name,openaq_location_id,openaq_pm25_sensor_id,openaq_no2_sensor_id,epa_site_id,latitude,longitude,county,daq_forecast_area,wasatch_front,has_pm25,kind
+hawthorne,Hawthorne,Salt Lake County,288,3724,3729,49-035-3006,40.7335,-111.8717,Salt Lake,slc,True,True,monitor
+rose_park,Rose Park,Rose Park,8777,25595,25592,49-035-3010,40.7955,-111.9309,Salt Lake,slc,True,True,monitor
+near_road,NR,Near Road,6426,5077829,5077780,49-035-4002,40.66284,-111.9018,Salt Lake,slc,True,True,monitor
+utah_tech_center,Utah Tech. Center,Environmental Quality,228304,1315805,1316192,49-035-3015,40.7771,-111.945,Salt Lake,slc,True,True,monitor
+herriman,Herriman #3,Herriman,5818,15813,15815,49-035-3013,40.49641,-112.0363,Salt Lake,slc,True,True,monitor
+copper_view,Copper View,Copper View,8758,25535,25538,49-035-2005,40.59806,-111.89417,Salt Lake,slc,True,True,monitor
+magna,MA,Magna #2,7296,21017,21018,49-035-1007,40.71206,-112.11112,Salt Lake,slc,True,True,monitor
+lake_park,Lake Park,Lake Park,228376,1316195,1316194,49-035-3014,40.70987,-112.00866,Salt Lake,slc,True,True,monitor
+prison_site,Prison Site,ZZ,228377,1316196,1316191,49-035-3016,40.8079,-112.08772,Salt Lake,slc,True,True,monitor
+red_butte,Red Butte,Red Butte,3318370,11669376,11670546,49-035-3018,40.76652,-111.82835,Salt Lake,slc,True,True,monitor
+beach,Beach,Beach #4,6199576,15161833,15161830,49-035-2004,40.735,-112.211,Salt Lake,slc,True,True,monitor
+bountiful,BV,Davis County,221401,1287320,1287321,49-011-0004,40.898,-111.8855,Davis,bv,True,True,monitor
+harrisville,Harrisville,Weber County,2218,1316200,24927,49-057-1003,41.3028,-111.9883,Weber,weber,True,True,monitor
+brigham_city,Brigham City #3,Box Elder County,3303046,11669374,11555818,49-003-0005,41.48993,-112.02143,Box Elder,boxelder,True,True,monitor
+erda,Erda,Tooele County,2168,3897,24943,49-045-0004,40.60056,-112.355,Tooele,tooele,True,True,monitor
+lindon,Lindon,Utah County,331,2654,16258,49-049-4001,40.3414,-111.7136,Utah,utah,True,True,monitor
+spanish_fork,Spanish Fork,Spanish Fork,1867,25846,25842,49-049-5010,40.1364,-111.6602,Utah,utah,True,True,monitor
+smithfield,Smithfield,Cache County,305,3346,3348,49-005-0007,41.84278,-111.85194,Cache,cache,False,True,monitor
+washakie,Washakie - NWBSN,Washakie Reservation,5227,13532,,49-003-7001,41.94595,-112.23318,Box Elder,boxelder,False,True,monitor
+heber,Heber,Wasatch County,3017494,10269453,10269452,49-051-0001,40.49796,-111.39763,Wasatch,hb,False,True,monitor
+price,P2,Price,781,1316201,1352,49-007-1003,39.5958,-110.77,Carbon,p2,False,True,monitor
+roosevelt,Roosevelt,Duchesne County,2110,3795,3797,49-013-0002,40.2943,-110.009,Duchesne,rs,False,True,monitor
+vernal,Vernal #4,Uintah County,1522,2681,2683,49-047-1004,40.46472,-109.56083,Uintah,v4,False,True,monitor
+redwash,Redwash,Redwash,2153,,5077755,49-047-2002,40.20443,-109.35321,Uintah,v4,False,False,monitor
+ouray,Ouray,Ouray,2213,,3991,49-047-2003,40.05485,-109.68737,Uintah,v4,False,False,monitor
+moab,Moab #7,Grand County,875165,4800118,4800116,49-019-0007,38.56605,-109.53717,Grand,m7,False,True,monitor
+enoch,Enoch,Enoch,8585,24944,24947,49-021-0005,37.74744,-113.05552,Iron,en,False,True,monitor
+hurricane,Hurricane,Washington County,1542,24950,2720,49-053-0007,37.179,-113.3052,Washington,washington,False,True,monitor
+ref_hidden_peak,Hidden Peak (Snowbird) ridge-top weather reference,,,,,,40.5617,-111.6452,Salt Lake,,True,False,weather_ref

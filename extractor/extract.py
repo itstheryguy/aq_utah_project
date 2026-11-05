@@ -150,11 +150,11 @@ def databricks_token(host):
         return json.load(resp)["access_token"]
 
 
-def upload(volume_path, data):
+def upload(volume_path, data, overwrite=False):
     """PUT a file into a Unity Catalog volume with the Files API."""
     host = os.environ["DATABRICKS_HOST"].rstrip("/")
     request = urllib.request.Request(
-        f"{host}/api/2.0/fs/files{urllib.parse.quote(volume_path)}?overwrite=false",
+        f"{host}/api/2.0/fs/files{urllib.parse.quote(volume_path)}?overwrite={str(overwrite).lower()}",
         data=data,
         method="PUT",
         headers={"Authorization": f"Bearer {databricks_token(host)}", "Content-Type": "application/octet-stream"},
