@@ -11,7 +11,8 @@ on:
   schedule:
     # :07 past the hour. Sources publish the previous hour's averages just after the hour, and GitHub's
     # scheduler is busiest at :00. Scheduled runs can still start late or be skipped under load; the
-    # sources' overlapping windows make that harmless.
+    # sources' overlapping windows make that harmless. GitHub registers a schedule when the file is pushed to
+    # the default branch; if runs never start, pushing a change to this file registers it again.
     - cron: "7 * * * *"
   workflow_dispatch:
     inputs:
