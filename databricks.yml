@@ -27,6 +27,9 @@ resources:
       name: aq_hourly
       # Every run MERGEs into the same tables, and streaming checkpoints can't be shared by two runs at once.
       max_concurrent_runs: 1
+      # Standard mode bills less per run than performance-optimized, in exchange for a slower start. A batch
+      # job that runs every few hours doesn't need the faster start.
+      performance_target: STANDARD
       parameters:
         - name: catalog
           default: ${var.catalog}
@@ -38,13 +41,15 @@ resources:
         - name: gold_mode
           default: incremental
       trigger:
-        # The GitHub Actions extractor lands one file per hour. The job runs when it arrives, so there's no
+        # The GitHub Actions extractor lands one file per hour. The job runs when files arrive, so there's no
         # clock to keep in sync between GitHub and Databricks.
         file_arrival:
           url: /Volumes/${var.catalog}/${var.schema}/landing/raw/
-          # Wait for writes to settle, and never start more than once per 10 minutes.
           wait_after_last_change_seconds: 60
-          min_time_between_triggers_seconds: 600
+          # At most one run per ~3 hours, which processes every file that landed since the last run. Forecasts
+          # are 24-72 h ahead, so inputs a few hours old barely change them, and this cuts runs from ~720 to
+          # ~240 a month. (Just under 3 h, so the file landing at the 3-hour mark still triggers a run.)
+          min_time_between_triggers_seconds: 10500
         # Paused until the ingest → features → export tasks exist. Unpause in prod once they do.
         pause_status: PAUSED
       email_notifications:
@@ -86,6 +91,54 @@ resources:
               mode: "{{job.parameters.gold_mode}}"
           max_retries: 1
           min_retry_interval_millis: 60000
+
+    aq_weekly_train:
+      name: aq_weekly_train
+      max_concurrent_runs: 1
+      parameters:
+        - name: catalog
+          default: ${var.catalog}
+        - name: schema
+          default: ${var.schema}
+      schedule:
+        # Mondays 11:00 UTC (4am MST), after a full weekend of hourly data.
+        quartz_cron_expression: "0 0 11 ? * MON"
+        timezone_id: UTC
+        # Paused until the hourly pipeline runs in prod; dev mode pauses it anyway.
+        pause_status: PAUSED
+      email_notifications:
+        on_failure:
+          - ${workspace.current_user.userName}
+      # Python script tasks (not notebooks) so each can pin a serverless environment: notebook tasks get the
+      # workspace default, which here is Python 3.10 without LightGBM, PyTorch, or MLflow.
+      environments:
+        - environment_key: lightgbm
+          spec:
+            environment_version: "4"
+            dependencies:
+              - lightgbm==4.7.0
+              - mlflow==3.18.0
+        - environment_key: gru
+          spec:
+            environment_version: "4"
+            dependencies:
+              # CPU-only build: ~200 MB instead of ~2.5 GB of CUDA libraries serverless CPUs can't use.
+              # Serverless can land on x86 or ARM machines, so both wheels are listed with platform markers.
+              - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; platform_machine == 'x86_64'"
+              - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; platform_machine == 'aarch64'"
+              - mlflow==3.18.0
+      # The two families train in parallel, and one failing doesn't stop the other's promotion.
+      tasks:
+        - task_key: train_lightgbm
+          environment_key: lightgbm
+          spark_python_task:
+            python_file: ./training/train_job.py
+            parameters: [--model, lightgbm, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}", --run-id, "{{job.run_id}}"]
+        - task_key: train_gru
+          environment_key: gru
+          spark_python_task:
+            python_file: ./training/train_job.py
+            parameters: [--model, gru, --catalog, "{{job.parameters.catalog}}", --schema, "{{job.parameters.schema}}", --run-id, "{{job.run_id}}"]
 
 targets:
   dev:

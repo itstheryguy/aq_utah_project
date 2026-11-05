@@ -93,13 +93,14 @@ gh workflow run extract -f schema=aq_dev                                       #
 ## Cost controls
 - Serverless jobs only, no all-purpose clusters left running.
 - HTTP extraction runs on a free GitHub Actions runner, so Databricks runs only process data.
-- Hourly job for ingest + features + export. Training is a separate weekly job.
+- Extraction is hourly (free), but the pipeline job runs at most every ~3 hours, in serverless standard mode, processing everything that landed since its last run. Training is a separate weekly job.
+- The SQL warehouse is 2X-Small with a 1-minute auto-stop. Ad-hoc checks go against the local gold snapshot where possible: the warehouse bills for every minute it's up.
 - A budget alert on the Databricks account (Account console → Usage → Budgets).
-- Cost per run measured from `system.billing.usage`.
+- Cost per run measured from `system.billing.usage` (see docs/design.md §13).
 
 ## Roadmap
 1. ~~Scaffold: repo, bundle, setup notebook, design doc~~
 2. ~~Bronze: hourly extractor + Auto Loader; backfill of AirNow, EPA AirData, and Open-Meteo history~~
 3. ~~Silver and gold: parsing, per-site units, MERGE on keys; EPA reconciliation; gold feature table~~
-4. Training: baselines, LightGBM, GRU, MLflow, comparison with the DAQ forecast
+4. Training: ~~baselines, LightGBM, GRU, MLflow, UC registry, promotion gate~~; comparison with the DAQ forecast
 5. Serving: export to Hugging Face, Streamlit Space, GitHub Action deploy

@@ -238,7 +238,8 @@ Silver and gold can be rebuilt from bronze at any time. Every write is a MERGE o
 | Weather features | Forecasts *as issued* (Open-Meteo Previous Runs) | Observed weather | In production, only forecast weather exists for the next 72 hours. Training on observed weather leaks information the model won't have and makes accuracy look better than it is (training/serving skew). |
 | Retraining | Weekly, with a promotion gate | Retrain only manually; promote every new model | A schedule keeps the model current without manual work. The gate stops a bad week of data from silently replacing a better model. |
 | Feature store | Delta table with a `(station_id, hour_utc TIMESERIES)` primary key (Unity Catalog feature table) | Online feature store; features computed separately in training and serving code | Batch inference reads the same table training does, so there's no online lookup to pay for, and one definition of each feature prevents training/serving skew. The timeseries key supports point-in-time joins if other tables' features are added later. |
-| Compute | Serverless jobs | All-purpose clusters | Each run takes minutes. Serverless bills only for those minutes and has no idle cluster to forget about. |
+| Compute | Serverless jobs, standard performance mode | All-purpose clusters; performance-optimized serverless | Each run takes minutes. Serverless bills only for those minutes and has no idle cluster to forget about. Standard mode costs less per run and only starts slower, which a batch job doesn't notice. |
+| Pipeline cadence | Extract hourly, process at most every ~3 hours | Process every hour | Measured at ~$0.13 per run, hourly processing would cost ~$90 a month, about twice the budget. Forecasts are 24–72 h ahead, so inputs a few hours old barely change them. Extraction stays hourly, because it's free and keeps every hour's issued forecast for the weather features. |
 
 ## 10. Gold features
 
@@ -306,7 +307,7 @@ Trained on 2024-01-22 → 2025-10-28, tested on 2025-11-01 → 2026-10-31: one f
 4. **Promotion gate:** the new version gets the `champion` alias only if it beats both the current champion and the persistence baseline on the same test window (MAE, per horizon). Otherwise the current champion stays.
 5. On promotion, publish the model and an updated model card to the HF model repo.
 
-Hourly batch inference always loads `models:/<name>@champion`, so a promotion takes effect on the next hourly run without any code change.
+Batch inference always loads `models:/<name>@champion`, so a promotion takes effect on the next hourly run without any code change.
 
 ### Evaluation
 - MAE and RMSE for each horizon.
@@ -353,4 +354,15 @@ No Databricks SQL alerts: they need a SQL warehouse running on a schedule. Faili
 | New feature added to gold | Old rows lack the column | `MERGE WITH SCHEMA EVOLUTION` adds the column; a `gold_mode=full` run fills it in for every past row. |
 | New model is worse | Worse forecasts | Promotion gate keeps the current champion. |
 | Job misses hours | App shows stale data | The exported file carries an `as_of` timestamp, and the app shows its age. |
-| Cost overrun | Bill exceeds budget | Budget alert on the account. Cost per run measured from `system.billing.usage`. Fallback: run every 2–3 hours. |
+| Cost overrun | Bill exceeds budget | Budget alert on the account. Cost per run measured from `system.billing.usage`. Already applied once: see the cost findings below. |
+
+### Cost findings (2026-11-05)
+Measured from `system.billing.usage` × `system.billing.list_prices` after the first three days of building:
+
+| Item | Cost | Lesson |
+|---|---|---|
+| SQL warehouse (Serverless Starter, Small, 10-minute auto-stop) | **$20.71**, ~75% of the total | Ad-hoc checking queries cost more than every pipeline run together. Each query kept a Small warehouse up for 10+ minutes. **Fix:** 2X-Small (¼ the DBUs per hour) and a 1-minute auto-stop, and checks run against the local gold snapshot instead. |
+| Pipeline job, 10 runs (backfill and full rebuilds) | $1.27 (~$0.13 per run) | At one run per hour that's ~$90 a month. **Fix:** standard performance mode, and at most one run per ~3 hours. |
+| Interactive serverless (notebooks in the UI) | $2.89 | |
+
+The biggest cost wasn't the pipeline or the models. It was an always-warm interactive warehouse. The budget alert didn't catch it, because the total was still under $50. Billing tables only show it with a few hours' delay.
