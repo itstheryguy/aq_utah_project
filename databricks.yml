@@ -56,7 +56,7 @@ resources:
           # are 24-72 h ahead, so inputs a few hours old barely change them, and this cuts runs from ~720 to
           # ~240 a month. (Just under 3 h, so the file landing at the 3-hour mark still triggers a run.)
           min_time_between_triggers_seconds: 10500
-        # Paused until the ingest → features → export tasks exist. Unpause in prod once they do.
+        # Paused by default; the prod target unpauses it (see targets), so dev runs only when started by hand.
         pause_status: PAUSED
       email_notifications:
         on_failure:
@@ -142,7 +142,7 @@ resources:
         # Mondays 11:00 UTC (4am MST), after a full weekend of hourly data.
         quartz_cron_expression: "0 0 11 ? * MON"
         timezone_id: UTC
-        # Paused until the hourly pipeline runs in prod; dev mode pauses it anyway.
+        # Paused by default; the prod target unpauses it.
         pause_status: PAUSED
       email_notifications:
         on_failure:
@@ -180,13 +180,25 @@ resources:
 
 targets:
   dev:
-    # Development mode prefixes the job name with [dev <user>] and pauses its schedule.
+    # Development mode prefixes job names with [dev <user>]. Triggers stay paused (the default above).
     mode: development
     default: true
     variables:
       schema: aq_dev
+      # Dev never publishes: the public dataset is what the live Space reads.
+      hf_dataset: ""
 
   prod:
     mode: production
+    # The only place schedules run. (Development mode doesn't pause a trigger that sets its status explicitly,
+    # so the safe default is PAUSED in the job definitions, overridden here.)
+    resources:
+      jobs:
+        aq_hourly:
+          trigger:
+            pause_status: UNPAUSED
+        aq_weekly_train:
+          schedule:
+            pause_status: UNPAUSED
     workspace:
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}

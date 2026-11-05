@@ -3,7 +3,7 @@
 #
 # Repository secrets: DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET (service principal
 # aq-extractor, write access to the landing volume only), OPENAQ_API_KEY.
-# Repository variable (optional): AQ_SCHEMA, the target schema. Defaults to aq_dev.
+# Repository variable: AQ_SCHEMA, the target schema (aq = production). Defaults to aq_dev if unset.
 
 name: extract
 
@@ -17,8 +17,8 @@ on:
   workflow_dispatch:
     inputs:
       schema:
-        description: Target schema
-        default: aq_dev
+        description: Target schema (empty = the AQ_SCHEMA repository variable, which is aq in production)
+        default: ""
 
 # Never run two extractions at once. A late scheduled run waits for the previous one.
 concurrency:
