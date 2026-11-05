@@ -9,6 +9,7 @@
 # MAGIC | `<catalog>.aq` schema | holds bronze, silver, and gold tables |
 # MAGIC | `<catalog>.aq.landing` volume | raw files from the extractor (`raw/`) and the historical backfill |
 # MAGIC | `<catalog>.aq.checkpoints` volume | streaming checkpoint storage |
+# MAGIC | `<catalog>.aq.exports` volume | files for use outside the workspace, e.g. the gold snapshot for local model development |
 # MAGIC
 # MAGIC The `catalog` and `schema` widgets default to `workspace.aq`. When the notebook runs as part of the
 # MAGIC `aq_hourly` job, the job parameters set them (see `databricks.yml`).
@@ -28,6 +29,7 @@ extractor = dbutils.widgets.get("extractor_principal")
 spark.sql(f"CREATE SCHEMA IF NOT EXISTS {catalog}.{schema}")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.landing")
 spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.checkpoints")
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {catalog}.{schema}.exports")
 
 # Auto Loader needs the folders it watches to exist before the first file arrives.
 for folder in ["raw", "epa"]:

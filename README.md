@@ -41,6 +41,8 @@ flowchart LR
 | `extractor/backfill.py` | One-time history: OpenAQ (AirNow) PM2.5 + NO₂, Open-Meteo forecasts as issued, EPA AirData. Resumable, with a `repair` step |
 | `notebooks/02_silver.py` | Parses each source, converts units per site, MERGEs on each table's key into the `silver_*` tables |
 | `notebooks/03_gold.py` | One PM2.5 series per station (`silver_readings_best`), then the `gold_features` feature table: lags, rolling stats, forecast weather as issued, labels |
+| `aq_models/` | Model code shared by local development and the training job: features and metrics, LightGBM, GRU |
+| `training/backtest.py` | Local backtest on the gold snapshot: train before a cutoff, score the year after, by season |
 | `docs/design.md` | Design document |
 | `databricks.yml` | Asset Bundle defining the jobs |
 

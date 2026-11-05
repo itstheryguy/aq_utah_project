@@ -1,3 +1,13 @@
 # Local tooling only. Databricks notebooks install their own dependencies.
 #   python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+# LightGBM on macOS also needs OpenMP: brew install libomp
 huggingface_hub==2.4.0
+
+# Local model development (training/, aq_models/)
+numpy==2.5.4
+pandas==3.1.1
+pyarrow==26.0.1
+lightgbm==4.7.0
+scikit-learn==1.9.1
+mlflow==3.18.0
+torch==2.15.0

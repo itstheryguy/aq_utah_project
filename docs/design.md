@@ -275,10 +275,29 @@ Persistence gets worse fastest in winter, when inversions build and break over d
 
 ## 11. Models and training
 
-- **Baselines:** persistence (forecast = latest value) and same hour yesterday.
+- **Baselines:** persistence (forecast = latest value) and the trailing 24-hour mean. Same-hour-yesterday is persistence at 24 h, and undefined at 48 and 72 h.
 - **LightGBM:** one model per horizon on the gold features.
 - **GRU (PyTorch, trained from scratch):** one network with three outputs (one per horizon). Input is the last 24–72 hours of readings plus forecast weather.
 - **Stretch goal:** a zero-shot time-series foundation model (e.g. Chronos) as a fourth option.
+
+### Backtest (2026-11-05)
+Trained on 2024-01-22 → 2025-10-28, tested on 2025-11-01 → 2026-10-31: one full winter and summer the models never saw. Run on a laptop from the gold snapshot (`training/backtest.py`). MAE in µg/m³, all 26 stations:
+
+| Model | 24 h | 48 h | 72 h | Winter 24 / 72 h | Summer 24 / 72 h | Train time (M1 Pro) |
+|---|---|---|---|---|---|---|
+| Persistence | 3.30 | 3.80 | 4.07 | 3.63 / 5.20 | 4.19 / 4.89 | |
+| Trailing 24 h mean | 3.25 | 3.62 | 3.82 | 3.84 / 5.06 | 4.02 / 4.65 | |
+| **LightGBM** (Tweedie) | **2.50** | **2.66** | 2.80 | **2.66** / 3.19 | 3.41 / 3.74 | 2.7 min |
+| **GRU** (from scratch) | 2.57 | 2.67 | **2.78** | 2.80 / **3.05** | **3.36** / **3.70** | 1.5 min (MPS) |
+
+- **Both models beat persistence by 24–32%, and the gap widens with the horizon.** In winter at 72 h they cut the error by 39–41%, which is where forecast weather matters most.
+- **Inversion and pressure-change forecasts rank among LightGBM's top features,** after recent PM2.5, station, and season. That confirms the valley-minus-ridge proxy (§10) carries signal.
+- **The two models are roughly tied, with different strengths.** LightGBM is better at short range, the GRU at 72 h and in summer. The app shows both.
+- **Objective:** Tweedie beat squared error at every horizon and brought bias near zero. Huber was similar overall but worse in winter.
+- **Neither model forecasts spikes.** On hours ≥ 35.5 µg/m³ (unhealthy for sensitive groups, 696 hours in the test year), every model, persistence included, is off by 30–35, almost all of it underprediction. No objective changed that. Fireworks smoke and plumes from distant wildfires aren't visible in these features. A smoke signal (e.g. NOAA HMS smoke polygons, or a satellite aerosol product) is the obvious next feature. *Open.*
+- **The GRU's validation MAE peaked at epoch 2.** A 28-day validation window is small and seasonally narrow, so early stopping is noisy. *Open: a longer or season-matched validation window.*
+
+**Local caveat:** on macOS, LightGBM and PyTorch each load their own OpenMP runtime, and PyTorch CPU ops segfault with both loaded. The backtest trains one model per process for that reason. Linux isn't affected.
 
 ### Weekly training and promotion
 1. Read `gold_features` into pandas. A few million rows fits in memory.

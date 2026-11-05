@@ -343,6 +343,23 @@ display(spark.table("ops_metrics").where(f"task = 'gold' AND run_id = '{run_id}'
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ## Snapshot for local development
+# MAGIC A `full` run also writes the whole table as one Parquet file to the `exports` volume (~100 MB), so models
+# MAGIC can be developed on a laptop without a SQL warehouse running:
+# MAGIC `databricks fs cp dbfs:/Volumes/<catalog>/<schema>/exports/gold_features.parquet data/`
+
+# COMMAND ----------
+
+if mode == "full":
+    snapshot = f"/Volumes/{catalog}/{schema}/exports/gold_features.parquet"
+    pdf = spark.table("gold_features").drop("row_hash", "updated_at").orderBy(*KEYS).toPandas()
+    pdf.attrs = {}  # Spark Connect puts query metrics here, which pandas can't write into Parquet metadata
+    pdf.to_parquet(snapshot, index=False)
+    print("Wrote", snapshot)
+
+# COMMAND ----------
+
 # MAGIC %sql
 # MAGIC SELECT s.name, g.hour_utc, g.pm25_ugm3, g.pm25_mean_24h, g.region_pm25, g.wx24_inversion_c, g.wx24_wind_mean_24h, g.pm25_t24
 # MAGIC FROM gold_features g JOIN silver_station s USING (station_id)
