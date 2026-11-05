@@ -76,7 +76,8 @@ def merge_stream(name, sources, transform, target, keys, ddl, table="bronze_raw"
     spark.sql(f"CREATE TABLE IF NOT EXISTS {fq(target)} ({ddl}) CLUSTER BY ({', '.join(keys)})")
 
     def write_batch(batch, batch_id):
-        batch = batch.cache()
+        # No batch.cache(): serverless environment version 4 rejects cache() inside foreachBatch. Steps
+        # that read the batch more than once recompute it from bronze, which is cheap at these volumes.
         rows, extra_metrics = transform(batch)
         value_cols = [c for c in rows.columns if c not in keys and c != "fetched_at"]
 
@@ -112,7 +113,6 @@ def merge_stream(name, sources, transform, target, keys, ddl, table="bronze_raw"
         ).select(
             "run_id", F.current_timestamp().alias("ts"), F.lit("silver").alias("task"), "source", "metric", "value"
         ).write.mode("append").saveAsTable(fq("ops_metrics"))
-        batch.unpersist()
 
     # Bound each micro-batch: a backfill can put ~1 GB of raw JSON into bronze at once.
     stream = spark.readStream.option("maxBytesPerTrigger", "256m").table(table)

@@ -65,7 +65,8 @@ LANDED_SCHEMA = (
 
 
 def write_batch(batch, batch_id):
-    batch = batch.cache()
+    # No batch.cache(): serverless environment version 4 rejects cache() inside foreachBatch. The metrics
+    # below re-read the batch's files instead, which is cheap at one or a few files per batch.
     (
         batch.drop("_rescued_data")
         .write.format("delta").mode("append")
@@ -95,7 +96,6 @@ def write_batch(batch, batch_id):
         .option("txnAppId", "bronze_ops_metrics").option("txnVersion", batch_id)
         .saveAsTable(fq("ops_metrics"))
     )
-    batch.unpersist()
 
 
 query = (
