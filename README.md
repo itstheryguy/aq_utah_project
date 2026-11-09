@@ -2,14 +2,31 @@
 
 Forecasts PM2.5 24, 48, and 72 hours ahead for monitoring stations across Utah, with the focus on the Salt Lake Valley, where winter inversions and summer wildfire smoke produce some of the worst short-term air quality in the US.
 
-- A **GitHub Actions** extractor pulls Utah DAQ, OpenAQ, and Open-Meteo every hour and lands the raw responses in Databricks.
-- **Databricks** loads them with Auto Loader, builds bronze → silver → gold Delta tables, and trains models every week.
-- Every hour, the current champion models forecast every station (batch inference). Each forecast is stored and later compared with what actually happened.
-- **Hugging Face** hosts the trained models, the latest forecasts, and a **Streamlit** app. Enter a zip code, pick a model, and see recent air quality, the forecast, and how accurate each model has been.
+**[Live app](https://huggingface.co/spaces/itstheryguy/aq-utah)** · [Models](https://huggingface.co/itstheryguy/aq-utah-models) · [Forecast dataset](https://huggingface.co/datasets/itstheryguy/aq-utah-forecasts) · [Design doc](docs/design.md)
 
-> **Status:** end to end in dev. Live app: [huggingface.co/spaces/itstheryguy/aq-utah](https://huggingface.co/spaces/itstheryguy/aq-utah). See [Roadmap](#roadmap).
+- A **GitHub Actions** extractor pulls Utah DAQ, OpenAQ, and Open-Meteo every hour and lands the raw responses in Databricks.
+- **Databricks** loads them with Auto Loader, builds bronze → silver → gold Delta tables, and retrains three model families (ridge, LightGBM, GRU) every week. A new version is promoted only if it beats both the current champion and a persistence baseline.
+- Every few hours, the champion models forecast every station (batch inference). Each forecast is stored and later scored against what actually happened.
+- **Hugging Face** hosts the champion models, the latest forecasts, and a **Streamlit** app. Enter a zip code, pick a model, and see recent air quality, the forecast, and how accurate each model has been live.
+
+> **Status:** running in production. Extraction is hourly, the pipeline runs every ~3 hours, and training runs weekly. Everything runs on serverless compute, with cost measured per run.
 
 The design reasoning (requirements, scale estimates, tradeoffs, failure modes) is in **[docs/design.md](docs/design.md)**.
+
+## Results
+
+Backtest: trained through Oct 2025, then tested on Nov 2025 → Oct 2026, a full winter and summer the models never saw. MAE in µg/m³ across 26 stations, lower is better:
+
+| Model | 24 h | 48 h | 72 h | Winter, 72 h |
+|---|---|---|---|---|
+| Persistence (baseline) | 3.30 | 3.80 | 4.07 | 5.20 |
+| Ridge, 5 inputs | 2.78 | 3.02 | 3.11 | 4.00 |
+| **LightGBM** | **2.50** | **2.66** | 2.80 | 3.19 |
+| **GRU** (PyTorch, from scratch) | 2.57 | 2.67 | **2.78** | **3.05** |
+
+- LightGBM and the GRU cut persistence's error by 24–32%. In winter at 72 h they cut it by ~40%, because forecast inversion strength is what predicts how pollution builds up during an inversion.
+- Ridge on five inputs gets ~60% of that gain and trains in 3 seconds. It falls furthest behind in winter, where an inversion's effect is nonlinear.
+- No model predicts spikes from fireworks or distant wildfire smoke. A smoke feature is the next step ([design doc §11](docs/design.md#11-models-and-training)).
 
 ## Architecture
 
@@ -33,7 +50,7 @@ flowchart LR
 | Path | What it does |
 |---|---|
 | `extractor/extract.py` | Fetches the live sources and uploads one raw file per run to the landing volume |
-| `.github/workflows/extract.yml` | Runs the extractor hourly |
+| `.github/workflows/extract.yml` | Runs the extractor hourly, triggered by an external scheduler ([why](docs/design.md#why-extraction-runs-outside-databricks)) |
 | `reference/stations.csv` | Monitoring stations: DAQ site name ↔ OpenAQ IDs, coordinates, forecast area |
 | `notebooks/00_setup.py` | Creates the schema, volumes, and shared tables; grants the extractor access; checks secrets |
 | `reference/daq_unit_overrides.csv` | DAQ sites that report in different units from the rest of the feed, with evidence |
@@ -44,6 +61,7 @@ flowchart LR
 | `aq_models/` | Model code shared by local development and the training job: features and metrics, ridge regression, LightGBM, GRU |
 | `training/backtest.py` | Local backtest on the gold snapshot: train before a cutoff, score the year after, by season |
 | `training/train_job.py` | Weekly training job task: train, register in Unity Catalog, promotion gate |
+| `training/publish_job.py` | After training: publish each `@champion` and a generated model card to the Hugging Face model repo |
 | `serving/score_job.py` | Last task of each pipeline run: score every station with each `@champion`, MERGE into `predictions`, live accuracy, export to the HF dataset |
 | `space/` | The Hugging Face Space: Streamlit app run in the browser by stlite, plus the dataset card |
 | `docs/design.md` | Design document |
@@ -105,5 +123,6 @@ gh workflow run extract -f schema=aq_dev                                       #
 1. ~~Scaffold: repo, bundle, setup notebook, design doc~~
 2. ~~Bronze: hourly extractor + Auto Loader; backfill of AirNow, EPA AirData, and Open-Meteo history~~
 3. ~~Silver and gold: parsing, per-site units, MERGE on keys; EPA reconciliation; gold feature table~~
-4. Training: ~~baselines, ridge, LightGBM, GRU, MLflow, UC registry, promotion gate~~; comparison with the DAQ forecast
-5. Serving: ~~batch scoring, `predictions`, export to Hugging Face, Streamlit Space~~; GitHub Action deploy; switch the extractor and schedules to prod
+4. ~~Training: baselines, ridge, LightGBM, GRU, MLflow, UC registry, promotion gate, publish to Hugging Face~~
+5. ~~Serving: batch scoring, `predictions`, live accuracy, export to Hugging Face, Streamlit Space; prod schedules~~
+6. Next: compare accuracy with Utah DAQ's own forecast; add a smoke feature (NOAA HMS) for wildfire spikes; deploy the bundle from GitHub Actions; a zero-shot foundation model (Chronos) as a fourth option

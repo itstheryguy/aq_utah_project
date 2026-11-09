@@ -19,7 +19,7 @@ Code and design: [github.com/itstheryguy/aq_utah_project](https://github.com/its
 
 | File | One row per | Columns |
 |---|---|---|
-| `latest/forecasts.csv` | station × model × horizon | `station_id`, `hour_utc` (newest reading the forecast starts from), `model` (`lightgbm`, `gru`, `persistence`), `model_version`, `horizon_h`, `target_hour_utc`, `predicted_pm25`, `input_age_h` |
+| `latest/forecasts.csv` | station × model × horizon | `station_id`, `hour_utc` (newest reading the forecast starts from), `model` (`lightgbm`, `gru`, `linear` (ridge), `persistence`), `model_version`, `horizon_h`, `target_hour_utc`, `predicted_pm25`, `input_age_h` |
 | `latest/history.csv` | station × hour, last 7 days | `station_id`, `hour_utc`, `pm25_ugm3` |
 | `latest/accuracy.csv` | model × horizon × window × region | Live MAE and bias of past forecasts against the readings that later arrived. `window_days` is 7 or 30. |
 | `latest/stations.csv` | station | `station_id`, `name`, `latitude`, `longitude`, `county`, `daq_forecast_area`, `wasatch_front` |
