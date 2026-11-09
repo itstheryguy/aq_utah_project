@@ -151,7 +151,7 @@ def main():
         mean = overall.mean(axis=1)
         beats_persistence = all(overall.loc["challenger", h] < overall.loc["persistence", h] for h in HORIZONS)
         beats_champion = champion is None or mean["challenger"] < mean["champion"]
-        promote = beats_persistence and beats_champion
+        promote = bool(beats_persistence and beats_champion)  # numpy.bool_ when a champion exists; json.dumps rejects it
         reason = ("first version" if champion is None else
                   f"mean MAE {mean['challenger']:.3f} vs champion v{champion.version} {mean['champion']:.3f}")
         if not beats_persistence:
