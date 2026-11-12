@@ -71,8 +71,9 @@ stations = spark.table("silver_station")
 
 # COMMAND ----------
 
-def merge_stream(name, sources, transform, target, keys, ddl, table="bronze_raw"):
-    """Stream `table` (bronze_raw rows from `sources` by default) through `transform` and MERGE into `target`."""
+def merge_stream(name, sources, transform, target, keys, ddl, table="bronze_raw", check=None):
+    """Stream `table` (bronze_raw rows from `sources` by default) through `transform` and MERGE into `target`.
+    `check(metrics)` runs after the batch's metrics are written and can raise to fail the task."""
     spark.sql(f"CREATE TABLE IF NOT EXISTS {fq(target)} ({ddl}) CLUSTER BY ({', '.join(keys)})")
 
     def write_batch(batch, batch_id):
@@ -113,6 +114,8 @@ def merge_stream(name, sources, transform, target, keys, ddl, table="bronze_raw"
         ).select(
             "run_id", F.current_timestamp().alias("ts"), F.lit("silver").alias("task"), "source", "metric", "value"
         ).write.mode("append").saveAsTable(fq("ops_metrics"))
+        if check:
+            check(dict(metrics))
 
     # Bound each micro-batch: a backfill can put ~1 GB of raw JSON into bronze at once.
     stream = spark.readStream.option("maxBytesPerTrigger", "256m").table(table)
@@ -244,7 +247,22 @@ daq_ddl = (
     + ", ".join(f"{c} DOUBLE" for c in daq_columns)
     + ", row_hash STRING, fetched_at TIMESTAMP, first_seen_at TIMESTAMP, revisions INT"
 )
-merge_stream("daq", ["daq_xml"], transform_daq, "silver_readings", ["station_id", "hour_utc", "source"], daq_ddl).awaitTermination()
+
+
+def check_daq(m):
+    """Hard check: DAQ responses that parse to no PM2.5 at all mean the feed's format changed (a renamed or
+    restructured field), not that the air is clean. Fail loudly instead of MERGEing empty readings. The batch's
+    metrics are already in ops_metrics, including unknown_xml_tags and null_share_pm25_ugm3."""
+    pm25_null = m.get("null_share_pm25_ugm3")
+    if m["bronze_rows"] and (m["rows"] == 0 or pm25_null is None or pm25_null >= 1.0):
+        raise RuntimeError(
+            f"DAQ parse check failed: {m['bronze_rows']} DAQ responses gave {m['rows']} station-hours and no PM2.5 "
+            f"values (unknown_xml_tags={m.get('unknown_xml_tags')}). The DAQ XML format may have changed."
+        )
+
+
+merge_stream("daq", ["daq_xml"], transform_daq, "silver_readings", ["station_id", "hour_utc", "source"], daq_ddl,
+             check=check_daq).awaitTermination()
 
 # COMMAND ----------
 
