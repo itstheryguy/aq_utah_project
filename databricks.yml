@@ -76,7 +76,7 @@ resources:
             dependencies:
               - lightgbm==4.7.0
               - scikit-learn==1.9.1
-              - mlflow==3.81.0
+              - mlflow==3.18.0
               - huggingface_hub==2.4.0
               - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl ; platform_machine == 'x86_64'"
               - "torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl ; platform_machine == 'aarch64'"
