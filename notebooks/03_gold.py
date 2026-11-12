@@ -215,7 +215,6 @@ features = grid.join(region, "hour_utc", "left").select(
     F.count(pm).over(trailing(24)).alias("pm25_obs_24h"),
     (pm - F.lag(pm, 24).over(w)).alias("pm25_change_24h"),
     F.avg("no2_ppb").over(trailing(24)).alias("no2_mean_24h"),
-    F.avg("no2_ppm").over(trailing(6)).alias("no2_mean_6h"),
     "region_pm25", "region_pm25_mean_24h",
     F.hour(local).alias("hour_local"),
     F.dayofweek(local).alias("dow_local"),
