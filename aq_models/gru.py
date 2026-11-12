@@ -125,7 +125,7 @@ class GRUForecaster:
 
         dev = _device()
         self.net = Net(arrays[1].shape[1], arrays[2].shape[1], len(self.stations), self.cfg).to(dev)
-        opt = torch.optim.AdamW(self.net.parameters(), lr=self.cfg["lr"], weight_decay=1e-4)
+        opt = torch.optim.AdamW(self.net.parameters(), lr=self.cfg["lr"], weight_decay=self.cfg["weight_decay"])
         best, best_state, waited = np.inf, None, 0
         log(f"GRU: {len(fit_idx):,} training sequences, {len(valid_idx):,} validation, device {dev}")
         for epoch in range(1, self.cfg["max_epochs"] + 1):
